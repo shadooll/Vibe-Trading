@@ -190,6 +190,13 @@ def _is_literal_node(node: ast.AST) -> bool:
             (key is None or _is_literal_node(key)) and _is_literal_node(value)
             for key, value in zip(node.keys, node.values)
         )
+    # ``-0.5`` parses as UnaryOp(USub, Constant(0.5)); a sign applied to a
+    # literal is still a compile-time constant, so treat it as literal too.
+    # Without this, shadow rules with a negative threshold (e.g.
+    # prior_5d_return_min) are wrongly rejected as "executable top-level
+    # statement" by _validate_signal_engine_source.
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        return _is_literal_node(node.operand)
     return False
 
 
@@ -219,8 +226,15 @@ def _is_safe_reference(node: ast.AST | None) -> bool:
 
 def _validate_function_def(node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
     """Reject import-time execution in function definitions."""
-    if node.decorator_list:
-        raise ValueError(f"Decorators are not allowed on function {node.name!r}")
+    for dec in node.decorator_list:
+        # @staticmethod / @classmethod are safe builtins: they do not execute
+        # arbitrary code at import time. The shadow engine template ships
+        # @staticmethod helpers, so allow exactly these and nothing else.
+        if isinstance(dec, ast.Name) and dec.id in {"staticmethod", "classmethod"}:
+            continue
+        raise ValueError(
+            f"Decorator {ast.unparse(dec)} is not allowed on function {node.name!r}"
+        )
     for default in [*node.args.defaults, *[d for d in node.args.kw_defaults if d]]:
         if not _is_literal_node(default):
             raise ValueError(f"Non-literal default is not allowed on function {node.name!r}")

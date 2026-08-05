@@ -14,6 +14,10 @@ node_modules/
 # Backtest output artifacts
 results/
 
+# Personal broker trade exports and their local conversion
+# (real trade data must not be committed; see AGENT_CONTRIBUTOR_GUIDE.md)
+export_trade_data/
+
 .env
 agent/.env
 

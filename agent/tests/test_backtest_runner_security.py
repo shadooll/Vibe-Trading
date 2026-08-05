@@ -284,3 +284,83 @@ def test_signal_engine_allows_unreachable_network_helper(tmp_path) -> None:
 
     module = _load_module_from_file(signal_file, _module_name())
     assert hasattr(module, "SignalEngine")
+
+
+def test_signal_engine_allows_negative_literal_rules(tmp_path) -> None:
+    # Shadow rules legitimately carry negative thresholds (e.g. a rule entered
+    # after a 5-day pullback: prior_5d_return_min = -0.05). ``-0.05`` parses as
+    # UnaryOp(USub, Constant(0.05)) and must count as a literal, otherwise the
+    # whole RULES assignment is wrongly rejected as executable top-level code.
+    signal_file = tmp_path / "signal_engine.py"
+    signal_file.write_text(
+        "\n".join(
+            [
+                '"""Shadow engine with negative rule thresholds."""',
+                "RULES = [",
+                "    {'rule_id': 'R1', 'prior_5d_return_min': -0.05,",
+                "     'prior_5d_return_max': 0.02, 'hold_days': 2},",
+                "    {'rule_id': 'R2', 'prior_5d_return_min': -0.0026,",
+                "     'prior_5d_return_max': 0.1806, 'hold_days': 4},",
+                "]",
+                "class SignalEngine:",
+                "    def generate(self, *args, **kwargs):",
+                "        return []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    module = _load_module_from_file(signal_file, _module_name())
+    assert len(module.RULES) == 2
+
+
+def test_signal_engine_allows_staticmethod_helpers(tmp_path) -> None:
+    # The bundled shadow engine template ships @staticmethod helpers; those are
+    # safe builtins (no import-time code execution) and must not be rejected.
+    signal_file = tmp_path / "signal_engine.py"
+    signal_file.write_text(
+        "\n".join(
+            [
+                '"""Shadow engine with staticmethod helpers."""',
+                "import pandas as pd",
+                "class SignalEngine:",
+                "    @staticmethod",
+                "    def _compute_rsi(close):",
+                "        return close * 0.0",
+                "    def generate(self, data_map):",
+                "        return {c: self._compute_rsi(df['close']) for c, df in data_map.items()}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    module = _load_module_from_file(signal_file, _module_name())
+    assert callable(module.SignalEngine._compute_rsi)
+
+
+@pytest.mark.parametrize(
+    "decorator",
+    [
+        "@some_helper",
+        "@os.system",
+        "@functools.wraps",
+    ],
+)
+def test_signal_engine_rejects_non_builtin_decorator(tmp_path, decorator) -> None:
+    # Only staticmethod/classmethod are allowlisted; any other decorator runs
+    # at import time and must still be rejected.
+    signal_file = tmp_path / "signal_engine.py"
+    signal_file.write_text(
+        "\n".join(
+            [
+                "class SignalEngine:",
+                f"    {decorator}",
+                "    def generate(self, *args, **kwargs):",
+                "        return []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="not allowed on function"):
+        _load_module_from_file(signal_file, _module_name())
