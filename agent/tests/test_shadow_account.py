@@ -339,6 +339,32 @@ def test_select_multi_market_codes_covers_all_markets(profitable_journal: Path) 
 
 
 @pytest.mark.unit
+def test_liquid_basket_codes_route_to_their_market() -> None:
+    """Every liquid-basket code must classify to the market it is listed under.
+
+    Regression: the US basket shipped bare tickers ("AAPL"), and
+    _detect_market defaults unmatched codes to a_share — so the shadow
+    backtest sent AAPL/MSFT/NVDA/AMZN/GOOGL down the A-share fallback chain
+    (tushare) and failed with NoAvailableSourceError.
+    """
+    from backtest.engines._market_hooks import _detect_market
+    from src.shadow_account.backtester import _LIQUID_BASKETS, SUPPORTED_MARKETS
+
+    expected = {
+        "china_a": "a_share",
+        "hk": "hk_equity",
+        "us": "us_equity",
+        "crypto": "crypto",
+    }
+    for market in SUPPORTED_MARKETS:
+        for code in _LIQUID_BASKETS[market]:
+            actual = _detect_market(code)
+            assert actual == expected[market], (
+                f"{code} is in basket {market} but routes as {actual}"
+            )
+
+
+@pytest.mark.unit
 def test_run_shadow_backtest_with_mocked_runner(
     profitable_journal: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
