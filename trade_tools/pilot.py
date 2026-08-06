@@ -188,6 +188,10 @@ def _build_agent(max_iter: int, session_id: str = ""):
         max_iterations=max_iter,
         persistent_memory=pm,
         event_callback=_noop,
+        # Track B：关掉 grounding 价格校验——agent 自算的止损/目标价会被当
+        # "未观测冲突/歧义"拒绝（pilot 首点实测 numeric_claim_ambiguous_symbol），
+        # 导致决策丢失。Track B 的产出就是这些派生价，live 安全闸在此是反效果。
+        grounding_enabled=False,
     )
 
 
@@ -204,11 +208,11 @@ def _memo_prompt(symbol: str, name: str) -> str:
         f"仓位=账户×1%÷止损距离\n"
         f"成本纪律：get_market_data 最多 2 次、technical_indicators 最多 3 次，"
         f"够用就停，禁止重复抓取。\n"
-        f"输出研究备忘录，格式必须为：\n"
+        f"输出研究备忘录（这是最终答案，必须完整给出，不要只说要输出）：\n"
         f"### 结论\n买 或 不买\n"
         f"### 核心依据\n（每条带具体数字和来源）\n"
         f"### 操作计划（仅结论=买时）\n止损：__ 目标：__ 仓位：__%\n"
-        f"所有数字必须来自工具输出，不许编造。"
+        f"所有数字必须来自工具输出，不许编造。最后一行必须是你的决策结论。"
     )
 
 
@@ -319,7 +323,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--reps", type=int, default=1, help="每点跑几次（量方差）")
     parser.add_argument(
-        "--max-iter", type=int, default=12, help="agent 最大迭代数（限流）"
+        "--max-iter", type=int, default=16, help="agent 最大迭代数（限流）"
     )
     parser.add_argument("--signal-date", default="", help="信号日（默认今天）")
     parser.add_argument(

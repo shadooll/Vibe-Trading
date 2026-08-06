@@ -144,7 +144,9 @@ def _tool_call(call_id: str, tool_name: str, **arguments: Any) -> SimpleNamespac
 def _build_direct_agent(
     tmp_path: Path,
     resolver_result: str,
-) -> tuple[AgentLoop, _ResolverTool, _MarketTool, _PrivateCompanySkillTool, TraceWriter]:
+) -> tuple[
+    AgentLoop, _ResolverTool, _MarketTool, _PrivateCompanySkillTool, TraceWriter
+]:
     resolver = _ResolverTool(resolver_result)
     market = _MarketTool(_market_payload())
     private_skill = _PrivateCompanySkillTool()
@@ -245,7 +247,9 @@ def test_market_sensitive_skill_waits_for_prior_identity_batch(
     tmp_path: Path,
 ) -> None:
     """Workflow selection cannot race the resolver in the same assistant turn."""
-    agent, resolver, _, skill, trace = _build_direct_agent(tmp_path, _resolver_payload())
+    agent, resolver, _, skill, trace = _build_direct_agent(
+        tmp_path, _resolver_payload()
+    )
     messages: list[dict[str, Any]] = []
     react_trace: list[dict[str, Any]] = []
 
@@ -477,7 +481,10 @@ def test_listed_identity_blocks_private_company_workflow(
         "SpaceX is a private company and is not publicly traded."
     )
     assert validation.valid is False
-    assert any(issue["code"] == "listed_identity_relabelled_private" for issue in validation.issues)
+    assert any(
+        issue["code"] == "listed_identity_relabelled_private"
+        for issue in validation.issues
+    )
 
 
 def test_not_found_identity_allows_private_company_workflow(
@@ -566,13 +573,11 @@ def test_final_numeric_gate_rejects_known_trace_contradiction(tmp_path: Path) ->
         success=True,
     )
 
-    bad = ledger.validate_final_answer(
-        """| 日期 | 开盘 | 最高 | 最低 | 收盘 |
+    bad = ledger.validate_final_answer("""| 日期 | 开盘 | 最高 | 最低 | 收盘 |
 |---|---:|---:|---:|---:|
 | 2026-06-23 | 0.895 | 0.907 | 0.892 | 0.903 |
 
-建议重仓买入价为 0.881。"""
-    )
+建议重仓买入价为 0.881。""")
     good = ledger.validate_final_answer(
         "562500.SS（Yahoo，CNY）在 2026-06-23 的已观测开盘价为 1.141，收盘价为 1.137。"
     )
@@ -613,9 +618,7 @@ def test_numeric_gate_validates_derived_formula_and_provenance(tmp_path: Path) -
     assert no_observed_input.valid is False
     assert good.valid is True
     assert missing_provenance.valid is False
-    assert {
-        issue["code"] for issue in missing_provenance.issues
-    } >= {
+    assert {issue["code"] for issue in missing_provenance.issues} >= {
         "canonical_symbol_not_surfaced",
         "data_source_not_surfaced",
         "currency_not_surfaced",
@@ -721,9 +724,7 @@ def test_agent_loop_rejects_then_corrects_ungrounded_final_answer(
     assert "0.881" not in streamed
     assert "1.137" in streamed
     completed_thinking = "".join(
-        data.get("content", "")
-        for event, data in events
-        if event == "thinking_done"
+        data.get("content", "") for event, data in events if event == "thinking_done"
     )
     assert "0.881" not in completed_thinking
     artifact = json.loads(
@@ -733,17 +734,61 @@ def test_agent_loop_rejects_then_corrects_ungrounded_final_answer(
     assert artifact["validations"][-1]["valid"] is True
 
 
+def test_agent_loop_grounding_disabled_accepts_draft_as_is(tmp_path: Path) -> None:
+    """grounding_enabled=False: ungrounded draft is returned unchanged, no correction loop."""
+    resolver = _ResolverTool(_resolver_payload())
+    market = _MarketTool(_market_payload())
+    registry = ToolRegistry()
+    registry.register(resolver)
+    registry.register(market)
+    events: list[tuple[str, dict[str, Any]]] = []
+    agent = AgentLoop(
+        registry=registry,
+        llm=_CorrectingLLM(),
+        max_iterations=4,
+        grounding_enabled=False,
+        event_callback=lambda event, data: events.append((event, data)),
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    agent.memory.run_dir = str(run_dir)
+
+    result = agent.run("请分析机器人ETF并给出买入价")
+
+    assert result["status"] == "success"
+    # 未观测价草稿未被拒：直接成为最终答案。
+    assert "0.881" in result["content"]
+    # grounding 完全关闭：不产出 evidence artifact，无 answer_rejected 事件。
+    assert not (run_dir / "artifacts" / "grounding_evidence.json").exists()
+    assert not any(event == "answer_rejected" for event, _ in events)
+
+
 _SHORTLIST_QUERY = "A股低价高增长股票"
 _SHORTLIST_PAYLOAD = _resolver_payload(
     candidates=[
-        {"symbol": "000543.SZ", "name": "皖能电力", "market": "cn", "source": "eastmoney"},
-        {"symbol": "000727.SZ", "name": "冠捷科技", "market": "cn", "source": "eastmoney"},
+        {
+            "symbol": "000543.SZ",
+            "name": "皖能电力",
+            "market": "cn",
+            "source": "eastmoney",
+        },
+        {
+            "symbol": "000727.SZ",
+            "name": "冠捷科技",
+            "market": "cn",
+            "source": "eastmoney",
+        },
     ],
     query=_SHORTLIST_QUERY,
 )
 _NARROWED_PAYLOAD = _resolver_payload(
     candidates=[
-        {"symbol": "000543.SZ", "name": "皖能电力", "market": "cn", "source": "eastmoney"},
+        {
+            "symbol": "000543.SZ",
+            "name": "皖能电力",
+            "market": "cn",
+            "source": "eastmoney",
+        },
     ],
     query="000543.SZ",
 )
@@ -854,7 +899,9 @@ def test_narrowed_lock_retires_the_screening_shortlist(tmp_path: Path) -> None:
     assert prices.allowed is True
 
 
-def test_price_validation_ignores_symbol_date_and_quantity_digits(tmp_path: Path) -> None:
+def test_price_validation_ignores_symbol_date_and_quantity_digits(
+    tmp_path: Path,
+) -> None:
     """Ticker, calendar, holding-period, and position-cost digits are not prices (#955)."""
     ledger = _screened_ledger(tmp_path)
 
@@ -873,7 +920,9 @@ def test_price_validation_still_rejects_a_quote_outside_observed_range(
     """Masking non-price digits must not weaken the contradiction check (#955)."""
     ledger = _screened_ledger(tmp_path)
 
-    result = ledger.validate_final_answer("000543.SZ 收盘价 42.00 CNY（source: tencent）")
+    result = ledger.validate_final_answer(
+        "000543.SZ 收盘价 42.00 CNY（source: tencent）"
+    )
 
     assert result.valid is False
     assert [issue["code"] for issue in result.issues] == ["numeric_claim_conflict"]
@@ -883,7 +932,9 @@ def test_screening_run_reaches_a_final_answer_through_the_agent_loop(
     tmp_path: Path,
 ) -> None:
     """End-to-end: screen, load a workflow skill, narrow, quote, and answer (#955)."""
-    agent, resolver, market, skill, trace = _build_direct_agent(tmp_path, _SHORTLIST_PAYLOAD)
+    agent, resolver, market, skill, trace = _build_direct_agent(
+        tmp_path, _SHORTLIST_PAYLOAD
+    )
     market.result = _SCREENED_MARKET_PAYLOAD
     agent._grounding = GroundingLedger(
         run_dir=Path(agent.memory.run_dir),
