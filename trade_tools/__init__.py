@@ -9,6 +9,8 @@
     execution.py  A 股纸面交易模拟器（一份计划 + 行情 -> 已实现盈亏）
     gate.py       G1-G8 决策闸（从手册编码的确定性过滤器）
     pit.py        PIT 无幸存者抽样 + as-of 数据包生成器（已实现）
+    rules.py      R1-R4 确定性入场理由引擎（手册环③编码）
+    validation.py Track B 验证流水线（对照臂 + 逐点结算 + 门禁报告）
     stats.py      功效分析 + 配对 bootstrap/Wilcoxon + 三档门禁（已实现）
     cli.py        统一命令行入口（已实现）
 
@@ -29,6 +31,15 @@ from trade_tools.pit import (
     regime_at,
     regime_stratum,
     sample_points,
+)
+from trade_tools.rules import r1r4_signal, r1_signal, r2_signal, r3_signal, r4_signal
+from trade_tools.validation import (
+    PointResult,
+    make_buy_hold_plan,
+    make_r1r4_plan,
+    paired_deltas,
+    report,
+    run_points,
 )
 from trade_tools.stats import (
     BOOT_SEED,
@@ -63,6 +74,17 @@ __all__ = [
     "regime_at",
     "regime_stratum",
     "sample_points",
+    "r1r4_signal",
+    "r1_signal",
+    "r2_signal",
+    "r3_signal",
+    "r4_signal",
+    "PointResult",
+    "make_buy_hold_plan",
+    "make_r1r4_plan",
+    "paired_deltas",
+    "report",
+    "run_points",
     "DEFAULT_ALPHA",
     "DEFAULT_POWER",
     "DEFAULT_COST_FLOOR",

@@ -50,6 +50,10 @@ class TradePlan:
         max_hold_days: Holding cap in trading days (manual default ~4 weeks).
         position_pct: Fraction of account to deploy (0-1).
         account_equity: Account equity, used for sizing and the G1 check.
+        hold_only: Benchmark mode (buy-and-hold): no stop/target, time-stop
+            only, entry ignores the discipline filters. Used by the Track B
+            buy-and-hold baseline so it settles through the same simulator as
+            risk-managed trades.
         metadata: Free-form extras (e.g. ``position_value`` for sizing when
             no equity is given; ``source`` for the decision-maker id).
     """
@@ -64,6 +68,7 @@ class TradePlan:
     max_hold_days: int | None = None
     position_pct: float | None = None
     account_equity: float = 0.0
+    hold_only: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -112,8 +117,10 @@ class TradePlan:
         if self.decision != "buy":
             return reasons
 
-        if self.stop_price is None or self.target_price is None:
-            reasons.append("buy 必须给 stop_price 和 target_price")
+        if not self.hold_only and (
+            self.stop_price is None or self.target_price is None
+        ):
+            reasons.append("buy（非 hold_only）必须给 stop_price 和 target_price")
         if self.max_hold_days is None:
             reasons.append("buy 必须给 max_hold_days")
         if self.position_pct is None:
@@ -124,21 +131,22 @@ class TradePlan:
                 f"得到 {self.position_pct}"
             )
 
-        if self.stop_price is not None and self.entry_price is not None:
-            if self.stop_price >= self.entry_price:
-                reasons.append("stop_price 必须 < 入场价")
-        if self.target_price is not None and self.entry_price is not None:
-            if self.target_price <= self.entry_price:
-                reasons.append("target_price 必须 > 入场价")
+        if not self.hold_only:
+            if self.stop_price is not None and self.entry_price is not None:
+                if self.stop_price >= self.entry_price:
+                    reasons.append("stop_price 必须 < 入场价")
+            if self.target_price is not None and self.entry_price is not None:
+                if self.target_price <= self.entry_price:
+                    reasons.append("target_price 必须 > 入场价")
 
-        rr = self.rr
-        if rr is not None and rr < MIN_RR:
-            reasons.append(f"R:R={rr:.2f} < {MIN_RR} (G7)")
+            rr = self.rr
+            if rr is not None and rr < MIN_RR:
+                reasons.append(f"R:R={rr:.2f} < {MIN_RR} (G7)")
 
-        risk = self.risk_pct
-        if risk is not None and self.account_equity > 0:
-            if risk * self.position_value > MAX_RISK_PCT * self.account_equity:
-                reasons.append(
-                    f"单笔风险 {risk * self.position_pct:.2%} 账户 > {MAX_RISK_PCT:.0%} (G1)"
-                )
+            risk = self.risk_pct
+            if risk is not None and self.account_equity > 0:
+                if risk * self.position_value > MAX_RISK_PCT * self.account_equity:
+                    reasons.append(
+                        f"单笔风险 {risk * self.position_pct:.2%} 账户 > {MAX_RISK_PCT:.0%} (G1)"
+                    )
         return reasons

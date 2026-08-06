@@ -77,6 +77,30 @@ class TestNonBuy:
         assert p.validate() == []
 
 
+class TestHoldOnly:
+    def test_hold_only_without_stop_target_ok(self) -> None:
+        p = buy_plan(
+            stop_price=None, target_price=None, position_pct=1.0, hold_only=True
+        )
+        assert p.validate() == []
+
+    def test_hold_only_still_requires_hold_and_position(self) -> None:
+        p = buy_plan(
+            stop_price=None,
+            target_price=None,
+            max_hold_days=None,
+            position_pct=None,
+            hold_only=True,
+        )
+        reasons = p.validate()
+        assert any("max_hold_days" in r for r in reasons)
+        assert any("position_pct" in r for r in reasons)
+
+    def test_default_requires_stop_target(self) -> None:
+        p = buy_plan(stop_price=None, target_price=None)
+        assert any("stop_price" in r and "target_price" in r for r in p.validate())
+
+
 class TestDerived:
     def test_entry_price_defaults_to_signal_close(self) -> None:
         p = buy_plan()

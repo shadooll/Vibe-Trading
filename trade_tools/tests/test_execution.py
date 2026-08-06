@@ -148,3 +148,29 @@ class TestFailClosed:
         r = ExecutionSimulator(df).settle(buy_plan())
         assert not r.filled
         assert r.exit_reason == "no_bar_after_signal"
+
+
+class TestHoldOnly:
+    def test_buy_hold_fills_even_on_gap_up(self) -> None:
+        """买入持有基准跳过追高过滤器：高开 >3% 也照常成交。"""
+        r = run([[10.40, 10.60, 10.30, 10.50, 1_000_000]], hold_only=True)
+        assert r.filled
+        assert r.entry_price == pytest.approx(10.41)  # 10.40 + 1 tick
+
+    def test_buy_hold_time_stops_at_60(self) -> None:
+        """买入持有基准时间止损 = 60 天（不套 4 周默认）。"""
+        # 60 个平淡 bar，无触发；应 time_stop 而非 20 天卖出。
+        flat = [[10.1, 10.3, 9.9, 10.2, 1_000_000]] * 65
+        r = run(flat, hold_only=True, max_hold_days=60)
+        assert r.filled
+        assert r.exit_reason == "time_stop"
+        assert r.hold_days == 60
+
+    def test_buy_hold_no_stop_triggered(self) -> None:
+        """买入持有无止损：深跌到 -10% 也不触发止损，只走时间止损。"""
+        bars = [
+            [10.20, 10.30, 9.00, 9.10, 1_000_000],  # entry + deep drop
+        ] + [[9.10, 9.30, 8.90, 9.20, 1_000_000]] * 62
+        r = run(bars, hold_only=True, max_hold_days=60)
+        assert r.filled
+        assert r.exit_reason == "time_stop"

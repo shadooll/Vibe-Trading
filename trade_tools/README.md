@@ -11,6 +11,8 @@
 | `execution.py` | A股纸面交易模拟器：T+1、涨跌停、停牌、gap、盘中触发、时间止损、tick 滑点、费用 | 手册环⑤⑥、`track_b_plan.md` §三·3 |
 | `gate.py` | G1-G8 决策闸：确定性过滤器（含创业板/科创板/北交所禁买） | 手册第二条链 |
 | `pit.py` | PIT 无幸存者抽样 + as-of 数据包生成器（regime 判定、宇宙过滤、分层抽样、数据包） | `track_b_plan.md` §三·1/§三·2 |
+| `rules.py` | R1-R4 确定性入场理由引擎（手册环③编码；止损/目标按环④口径） | 手册环③④ |
+| `validation.py` | Track B 验证流水线：对照臂（买入持有/R1-R4）+ 逐点结算 + 配对差 + 门禁报告 | `track_b_plan.md` §三·4/§三·5 |
 | `stats.py` | 功效分析 + 配对 bootstrap/Wilcoxon + 三档门禁 | `track_b_plan.md` §三·4/§三·5 |
 | `cli.py` | 统一命令行入口 | 本文件（见下方「命令行」） |
 

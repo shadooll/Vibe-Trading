@@ -164,10 +164,12 @@ class ExecutionSimulator:
         raw_open = bar.open
         if self._at_limit(idx, 1.0):
             return 0.0, "limit_up_no_fill"
-        if raw_open > plan.signal_close * (1 + GAP_UP_LIMIT):
-            return 0.0, "gap_up_abandon"
-        if plan.stop_price is not None and raw_open < plan.stop_price:
-            return 0.0, "gap_down_stop_abandon"
+        if not plan.hold_only:
+            # 纪律过滤器（追高/破位放弃）只作用于风险管理交易；买入持有基准无条件买。
+            if raw_open > plan.signal_close * (1 + GAP_UP_LIMIT):
+                return 0.0, "gap_up_abandon"
+            if plan.stop_price is not None and raw_open < plan.stop_price:
+                return 0.0, "gap_down_stop_abandon"
         # 买入滑点：四舍五入到 tick 后取更差 1 tick（买 = 更高）。
         return _round_tick(raw_open) + TICK, None
 
@@ -179,6 +181,11 @@ class ExecutionSimulator:
         for i in range(entry_idx, len(self._bars)):
             bar = self._bars[i]
             held = i - entry_idx + 1
+            if plan.hold_only:
+                # 买入持有基准：只有时间止损，不设止损/目标。
+                if held >= max_hold:
+                    return "time_stop", i, i
+                continue
             if plan.stop_price is not None and bar.low <= plan.stop_price:
                 return "stop", i, i
             if plan.target_price is not None and bar.high >= plan.target_price:
@@ -237,11 +244,15 @@ class ExecutionSimulator:
                 ],
             )
 
-        max_hold = min(
-            plan.max_hold_days or DEFAULT_TIME_STOP_DAYS,
-            DEFAULT_TIME_STOP_DAYS,
-            HARD_CAP_DAYS,
-        )
+        if plan.hold_only:
+            # 买入持有基准：时间止损只受 60 天上限约束（不套手册 4 周默认）。
+            max_hold = min(plan.max_hold_days or HARD_CAP_DAYS, HARD_CAP_DAYS)
+        else:
+            max_hold = min(
+                plan.max_hold_days or DEFAULT_TIME_STOP_DAYS,
+                DEFAULT_TIME_STOP_DAYS,
+                HARD_CAP_DAYS,
+            )
         reason, trigger_idx, last_held = self._walk(plan, entry_idx, max_hold)
         if reason is None:  # 数据耗尽，未到任何触发点
             return SettlementResult(
