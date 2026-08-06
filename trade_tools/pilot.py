@@ -349,16 +349,22 @@ def main(argv: list[str] | None = None) -> int:
     for r in records:
         writer.writerow(r.to_row())
 
+    if args.out:
+        Path(args.out).write_text(buf.getvalue(), encoding="utf-8")
+        print(f"已落盘 -> {args.out}")
+
     summary = _summary(records)
     print("=== Pilot 汇总 ===")
     for k, v in summary.items():
         print(f"  {k}: {v}")
-    print(f"=== 明细（{len(records)} 行）===")
-    print(buf.getvalue())
-
-    if args.out:
-        Path(args.out).write_text(buf.getvalue(), encoding="utf-8")
-        print(f"已落盘 -> {args.out}")
+    # 控制台明细省略 content（含 ✓ 等非 GBK 字符会崩 Windows 控制台）；完整版在 CSV。
+    console_rows = [
+        {k: ("" if k == "content" else v) for k, v in r.to_row().items()}
+        for r in records
+    ]
+    print(f"=== 明细（{len(records)} 行，content 见 CSV）===")
+    for row in console_rows:
+        print(",".join(str(row[k]) for k in row))
     return 0
 
 
