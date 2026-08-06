@@ -42,9 +42,6 @@ DEFAULT_POINTS: dict[str, str] = {
     "600519.SH": "贵州茅台（白酒龙头）",
 }
 # 备忘录里买/不买结论的常见措辞。
-_BUY_RE = re.compile(
-    r"结论[:：]?\s*(买)|建议[:：]?\s*(买)|结论.*(买入|可买|建议买)", re.MULTILINE
-)
 _REFUSAL_RE = re.compile(
     r"(我不能|我不会|无法给出|无法提供|不生成买入价|无法生成)", re.MULTILINE
 )
@@ -53,9 +50,32 @@ _META_RE = re.compile(
     r"(不再调用工具|以现有已验证证据|收到，|收到\.|开始输出|即将输出备忘录)",
     re.MULTILINE,
 )
+# 结构化决策字段：优先"决策结论：X"行，其次"### 结论\nX"小节（pilot 实测：全文扫
+# 会把标题里的"买入/不买入"误判成买意图——决策必须从小节读，不扫全文）。
+_FINAL_DECISION_RE = re.compile(r"决策结论[：:]?\s*(买|不买|观望)", re.MULTILINE)
+_SECTION_DECISION_RE = re.compile(r"#{1,4}\s*结论[^\n]*\n\s*([^\n]+)", re.MULTILINE)
 _STOP_RE = re.compile(r"止损[:：]?\s*(\d+(?:\.\d+)?)")
 _TARGET_RE = re.compile(r"目标[:：]?\s*(\d+(?:\.\d+)?)")
 _POSITION_RE = re.compile(r"仓位[:：]?\s*(\d+(?:\.\d+)?)\s*%")
+
+
+def _extract_decision(text: str) -> str | None:
+    """从结构化决策字段读 buy / no_buy；未给出返回 None。
+
+    顺序：① ``决策结论：买/不买`` 行；② ``### 结论`` 小节的第一行。两处都无 =
+    未给出结论（元话语 / 解析失败）。
+    """
+    m = _FINAL_DECISION_RE.search(text)
+    if m:
+        return "buy" if m.group(1) == "买" else "no_buy"
+    m = _SECTION_DECISION_RE.search(text)
+    if m:
+        line = m.group(1).strip()
+        if "不买" in line or "观望" in line or "不买" in line:
+            return "no_buy"
+        if line == "买" or "买入" in line or "可买" in line:
+            return "buy"
+    return None
 
 
 def _noop(*_a: Any, **_k: Any) -> None:
@@ -118,9 +138,8 @@ def parse_memo(
         return None, "空备忘录"
     if _REFUSAL_RE.search(text):
         return None, "拒绝式回答（疑似 grounding 降级）"
-    if not _BUY_RE.search(text):
-        if _META_RE.search(text):
-            return None, "元话语结尾（未给买/不买结论）"
+    decision = _extract_decision(text)
+    if decision == "no_buy":
         return (
             TradePlan(
                 symbol=symbol,
@@ -130,8 +149,12 @@ def parse_memo(
             ),
             "",
         )
+    if decision is None:
+        if _META_RE.search(text):
+            return None, "元话语结尾（未给买/不买结论）"
+        return None, "未给出买/不买结论"
 
-    # 有"买"意图 → 需要止损/目标/仓位，缺一不可。
+    # 结论=买 → 需要止损/目标/仓位，缺一不可。
     try:
         stop = float(_STOP_RE.search(text).group(1)) if _STOP_RE.search(text) else None
         target = (
@@ -269,7 +292,7 @@ def run_one(
         tokens=_read_tokens(run_dir),
         content_len=len(content),
         refusal=bool(_REFUSAL_RE.search(content)),
-        buy_intent=bool(_BUY_RE.search(content)),
+        buy_intent=_extract_decision(content) == "buy",
         decision=decision,
         parse_ok=plan is not None,
         stop=plan.stop_price if plan is not None else None,
@@ -281,20 +304,31 @@ def run_one(
     )
 
 
+def _fetch_latest_close(symbol: str) -> float:
+    """经 loader 抓取该标的最近一个交易日收盘价（懒 import agent 包）。"""
+    from backtest.loaders.registry import resolve_loader
+
+    loader = resolve_loader("a_share")
+    data = loader.fetch([symbol], "2026-01-01", "2026-08-31", interval="1d")
+    frame = data.get(symbol)
+    if frame is None or frame.empty:
+        raise ValueError(f"{symbol} 取不到最新收盘")
+    return float(frame["close"].iloc[-1])
+
+
 def run_pilot(
     points: dict[str, str],
     reps: int,
     max_iter: int,
     signal_date: str,
-    signal_close: float,
+    signal_closes: dict[str, float],
 ) -> list[PilotRecord]:
     """按 (点 × rep) 顺序跑完，返回全部记录。"""
     records: list[PilotRecord] = []
     for symbol, name in points.items():
+        close = signal_closes.get(symbol, 0.0)
         for rep in range(1, reps + 1):
-            records.append(
-                run_one(symbol, name, max_iter, signal_date, signal_close, rep)
-            )
+            records.append(run_one(symbol, name, max_iter, signal_date, close, rep))
     return records
 
 
@@ -336,8 +370,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     points = {s: DEFAULT_POINTS.get(s, s) for s in args.symbols.split(",") if s}
+    # 每点各自的最新收盘：--signal-close 只对单点跑有效，多点各自抓。
+    signal_closes = {}
+    for symbol in points:
+        signal_closes[symbol] = (
+            args.signal_close if args.signal_close > 0 else _fetch_latest_close(symbol)
+        )
+        if args.signal_close <= 0:
+            print(f"{symbol} 最新收盘 {signal_closes[symbol]:.2f}")
     records = run_pilot(
-        points, args.reps, args.max_iter, args.signal_date, args.signal_close
+        points, args.reps, args.max_iter, args.signal_date, signal_closes
     )
 
     import csv
