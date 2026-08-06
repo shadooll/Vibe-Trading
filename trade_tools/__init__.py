@@ -10,7 +10,7 @@
     gate.py       G1-G8 决策闸（从手册编码的确定性过滤器）
     pit.py        PIT 无幸存者抽样 + as-of 数据包生成器（已实现）
     stats.py      功效分析 + 配对 bootstrap/Wilcoxon + 三档门禁（已实现）
-    cli.py        统一命令行入口（计划中）
+    cli.py        统一命令行入口（已实现）
 
 数据输出不落在这里——数据归数据，输出到 export_trade_data/ 下。
 """

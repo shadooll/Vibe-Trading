@@ -12,7 +12,7 @@
 | `gate.py` | G1-G8 决策闸：确定性过滤器（含创业板/科创板/北交所禁买） | 手册第二条链 |
 | `pit.py` | PIT 无幸存者抽样 + as-of 数据包生成器（regime 判定、宇宙过滤、分层抽样、数据包） | `track_b_plan.md` §三·1/§三·2 |
 | `stats.py` | 功效分析 + 配对 bootstrap/Wilcoxon + 三档门禁 | `track_b_plan.md` §三·4/§三·5 |
-| `cli.py` | 统一命令行入口 | **计划中** |
+| `cli.py` | 统一命令行入口 | 本文件（见下方「命令行」） |
 
 ## 用法
 
@@ -39,6 +39,28 @@ result = ExecutionSimulator(df).settle(plan)
 print(result.exit_reason, result.entry_price, result.exit_price,
       f"{result.net_ret:+.2%}")
 ```
+
+## 命令行
+
+统一入口 `trade_tools.cli`（`PYTHONPATH=. python -m trade_tools.cli …`），
+六个子命令都是纯标准库 argparse 子命令，每行一个 `cmd_xxx(args)` 函数：
+
+| 子命令 | 用途 | 示例 |
+|--------|------|------|
+| `check` | plan.json -> G1-G8 闸 -> 通过/拦截（含协议违规清单） | `python -m trade_tools.cli check plan.json` |
+| `settle` | plan.json + 不复权日线 CSV -> 纸面结算明细 | `python -m trade_tools.cli settle plan.json ohlcv.csv` |
+| `pack` | as-of 数据包（`--csv` 走本地离线，去掉即经 loader 抓取网络） | `python -m trade_tools.cli pack 600519.SH 2026-08-05 --csv ohlcv.csv --out pack.json` |
+| `sample` | PIT 分层决策点抽样，逐行输出 `symbol,date,regime`（纯本地） | `python -m trade_tools.cli sample --universe-dir universe/ --start 2022-01-01 --end 2023-12-31 --per-regime 10` |
+| `power` | 功效分析表（delta -> required_n，Phase 2 前看样本量） | `python -m trade_tools.cli power --delta 0.02 0.03 0.05` |
+| `verdict` | 三档门禁判定（通过 / 放弃 / 证据不足 + 中文 reason） | `python -m trade_tools.cli verdict 0.03 0.09 0.05` |
+
+注意：`verdict` 的 CI 下界/上界可能为负，负数位置参数需用 `--` 分隔，如
+`python -m trade_tools.cli verdict -- -0.05 -0.01 -0.03`。
+
+`plan.json` 支持 `TradePlan` 全字段（symbol/decision/signal_date/signal_close/
+entry_ref/stop_price/target_price/max_hold_days/position_pct/account_equity/
+metadata），可选的 `gate` 对象给 `GateContext`（`in_watchlist` 默认 true，
+其余默认 0）。
 
 ## 关键口径（与手册一致）
 
@@ -70,4 +92,5 @@ print(result.exit_reason, result.entry_price, result.exit_price,
 - **`stats.py`**：功效分析（`required_n`/`power_table`）、配对 bootstrap CI
   + Wilcoxon 符号秩、主端点描述统计（`effect_summary`）和三档门禁
   （`gate_verdict`：通过 / 放弃 / 证据不足）。**只用 numpy + 标准库
-  `statistics`**，不引 scipy。`cli.py` 落地后统一命令行入口也在这里。
+  `statistics`**，不引 scipy。`cli.py` 已落地统一命令行入口（见上方
+  「命令行」）。
