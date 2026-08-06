@@ -40,6 +40,7 @@ DEFAULT_POINTS: dict[str, str] = {
     "000725.SZ": "京东方A（面板/屏幕，LCD/OLED）",
     "510300.SH": "沪深300ETF（大盘指数）",
     "600519.SH": "贵州茅台（白酒龙头）",
+    "000636.SZ": "风华高科（MLCC 被动元件龙头）",
 }
 # 备忘录里买/不买结论的常见措辞。
 _REFUSAL_RE = re.compile(

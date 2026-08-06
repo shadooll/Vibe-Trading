@@ -101,6 +101,13 @@ class TestR1:
         closes = _uptrend() + [14.5]  # 创新高不是回踩
         assert r1_signal(_series(closes)) is None
 
+    def test_price_far_above_ma20_not_pullback(self) -> None:
+        """Pilot 实测：价高 MA20 15% 也触发 R1 是假触发——回踩须贴近线。"""
+        # 长期横盘 10 元（MA20≈10），近 6 根快速拉到 12，今天 11.8 小回
+        closes = [10.0] * 200 + [10.5, 11.0, 11.5, 12.0, 12.0, 11.8]
+        # 近 5 日低点 ≈10.98 远高于 MA20×1.03≈10.38 → 不贴近 20 日线 → 不触发
+        assert r1_signal(_series(closes)) is None
+
 
 class TestStopTarget:
     def test_stop_below_entry_target_above(self) -> None:

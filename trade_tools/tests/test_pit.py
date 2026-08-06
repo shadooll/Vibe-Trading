@@ -291,6 +291,23 @@ class TestSamplePoints:
         pts = sample_points({"600999.SH": df}, df.index[-20], df.index[-1], 5, seed=1)
         assert pts == []
 
+    def test_market_bars_drives_regime_labels(self) -> None:
+        """Pilot 实测修正：regime 用大盘判（手册环①），不是个股。
+
+        个股全程强劲上升（个股自身 regime=趋势），但传大盘序列后，点标签必须
+        反映大盘状态——对每个点，大盘在决策日的 regime == 点标签。
+        """
+        u = {"000001.SZ": make_series(trend_series())}  # 个股上升
+        market = make_series(range_series())["close"]  # 大盘 震荡→熊市→震荡
+        pts = sample_points(
+            u, "2015-06-01", "2017-03-01", 4, seed=5, market_bars=market
+        )
+        assert pts, "大盘震荡/熊市段应能抽到点"
+        for p in pts:
+            assert regime_stratum(market, p.date) == p.regime
+        # 个股自身是上升趋势，若没传 market_bars 会全标"趋势"——大盘震荡段不应有趋势标签。
+        assert all(p.regime != REGIME_TREND for p in pts)
+
     def test_no_points_after_delisting(self) -> None:
         full = make_series(trend_series(), start="2015-01-05")
         live = full.iloc[:800]  # 800 根后无数据（退市/长期停牌）

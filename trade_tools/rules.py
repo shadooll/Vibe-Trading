@@ -27,6 +27,9 @@ STOP_FLOOR = 0.97  # 止损最深 −3%（手册"前低 / −3%"取更靠下的�
 STOP_MIN_RET = 0.99  # 止损至少距入场 1%（防 R:R 失真）
 R1_PULLBACK_WINDOW = 3  # R1：最近 N 日不破 20 日线
 R1_PULLBACK_SHRINK = 3  # R1：回踩期量能对比窗口
+R1_APPROACH_PCT = 0.03  # R1：回踩须贴近 20 日线（近 5 日低点 ≤ MA20×1.03）
+R1_BREAK_PCT = 0.02  # R1：回踩可轻微下探，但不得跌破 MA20×0.98（破位≠回踩）
+R1_MAX_DIST_PCT = 0.05  # R1：当前价距 MA20 ≤ 5%（远离 = 追高，非站回）
 
 
 def _rsi_series(close: pd.Series, period: int = 14) -> pd.Series:
@@ -69,9 +72,16 @@ def r1_signal(bars: pd.DataFrame) -> dict | None:
     # 回踩前提：从高点回撤（不是创新高突破）
     if close >= float(c.iloc[-21:-1].max()):
         return None
-    # ② 最近 R1_PULLBACK_WINDOW 日收盘未破 20 日线
-    if any(c.iloc[-k] < ma20.iloc[-k] for k in range(1, R1_PULLBACK_WINDOW + 1)):
-        return None
+    # ② 回踩贴近且不破 20 日线：近 5 日最低点须进入 [MA20×0.98, MA20×1.03] 带
+    #    （Pilot 实测：价高 MA20 15% 也触发 R1 是假触发——那叫突破不叫回踩）
+    ma20_now = float(ma20.iloc[-1])
+    recent_low = float(lo.iloc[-5:].min())
+    if recent_low > ma20_now * (1 + R1_APPROACH_PCT):
+        return None  # 没回踩到线附近（还在远离的高位）
+    if recent_low < ma20_now * (1 - R1_BREAK_PCT):
+        return None  # 跌破 20 日线太多（破位不是回踩）
+    if close > ma20_now * (1 + R1_MAX_DIST_PCT):
+        return None  # 当前价远离 MA20（追高，非站回）
     # ③ 回踩期缩量（近 3 日均量 < 前一段均量）
     recent_vol = float(v.iloc[-R1_PULLBACK_WINDOW:].mean())
     prior_vol = float(

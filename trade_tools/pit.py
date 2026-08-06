@@ -284,13 +284,18 @@ def sample_points(
     min_spacing: int = MIN_POINT_SPACING,
     regime_fn: Callable[[pd.Series, str | pd.Timestamp], str] = regime_stratum,
     universe_filter: UniverseFilter | None = None,
+    market_bars: pd.Series | None = None,
 ) -> list[Point]:
     """确定性（固定 seed）分层抽样决策点。
 
     每个候选 ``(symbol, date)`` 只用该标的 <= date 的行情判定（无前视）：
-    过 ``universe_filter``（若给出）且 ``regime_fn`` 归入当前层才进入候选池。
-    同层内按固定 seed 洗牌后贪心挑选，任意两个已选点在同层内的交易日间距
-    >= ``min_spacing``（减少结算窗口重叠）。
+    过 ``universe_filter``（若给出）且归入当前层才进入候选池。同层内按固定
+    seed 洗牌后贪心挑选，任意两个已选点在同层内的交易日间距 >= ``min_spacing``。
+
+    **regime 判定对象**（Pilot 实测修正）：决策点的 regime 标签必须反映**大盘**
+    状态（手册环①：用 510300 判 趋势/震荡/未知 决定能用哪套理由），不是个股状态。
+    传 ``market_bars``（如 510300.SH 的收盘序列）则每个点按大盘判 regime；
+    不传则回退按个股判（纯分层/测试用）。
 
     Args:
         universe: ``{symbol: 日线}``（date 列或 DatetimeIndex 均可），完整历史。
@@ -300,6 +305,8 @@ def sample_points(
         min_spacing: 同层决策点最小交易日间距。
         regime_fn: 分层函数（默认 :func:`regime_stratum`，趋势/震荡/熊市/未知）。
         universe_filter: PIT 宇宙过滤器；None = 不做宇宙过滤（只分层）。
+        market_bars: 大盘收盘序列（DatetimeIndex）。给定时每个点的 regime =
+            大盘在决策日的判定；缺省按个股判。
     """
     if per_regime <= 0:
         raise ValueError(f"per_regime 必须 > 0，得到 {per_regime}")
@@ -310,6 +317,9 @@ def sample_points(
         raise ValueError(f"start_date {start.date()} > end_date {end.date()}")
 
     frames = {symbol: _norm_df(frame) for symbol, frame in universe.items()}
+    market = None
+    if market_bars is not None:
+        market = market_bars.astype(float).sort_index()
     rng = random.Random(seed)
     points: list[Point] = []
 
@@ -326,7 +336,9 @@ def sample_points(
                 if universe_filter is not None:
                     if not universe_filter.judge(symbol, hist, date).eligible:
                         continue
-                if regime_fn(close.iloc[: i + 1], date) != stratum:
+                # regime 用大盘（若给）判，不用个股——环①决定用哪套理由。
+                regime_series = market if market is not None else close.iloc[: i + 1]
+                if regime_fn(regime_series, date) != stratum:
                     continue
                 candidates.append((date, symbol))
 
