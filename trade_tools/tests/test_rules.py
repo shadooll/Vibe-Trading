@@ -76,16 +76,27 @@ class TestR4:
         )
         assert sig is None
 
+    def test_position_upper_half_no_trigger(self) -> None:
+        """Pilot 实测：回调后在区间上半部收阳 = 追反弹，非下沿企稳。"""
+        closes = [10.5] * 30 + [10.4, 10.3, 10.2, 10.1, 10.0, 10.3]
+        volumes = [BASE_VOL] * 30 + [BASE_VOL * 0.5] * 6
+        assert r4_signal(_series(closes, volumes)) is None
+
 
 class TestR3:
     def test_oversold_recovery_triggers(self) -> None:
-        # 急跌后强反弹：RSI 先破 30 再站回
-        closes = [10.0] * 40 + [9.0, 8.2, 7.6, 7.1, 6.8, 8.5]
+        # 急跌后多根反弹站回 30，且收盘在近 20 日区间下半部（买下沿不追中部）
+        closes = [10.0] * 40 + [9.0, 8.2, 7.6, 7.1, 6.4, 7.2, 7.8, 8.1, 8.0]
         sig = r3_signal(_series(closes))
         assert sig is not None and sig["reason"] == "R3"
 
     def test_steady_rise_no_trigger(self) -> None:
         assert r3_signal(_series(_uptrend())) is None
+
+    def test_rally_too_far_from_low_no_trigger(self) -> None:
+        """Pilot 实测：现价反弹到区间上沿（+53%）是追高位，不是超跌反弹。"""
+        closes = [10.0] * 40 + [9.0, 8.2, 7.6, 7.1, 6.4, 9.8]
+        assert r3_signal(_series(closes)) is None
 
 
 class TestR1:

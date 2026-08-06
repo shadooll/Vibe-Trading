@@ -30,6 +30,7 @@ R1_PULLBACK_SHRINK = 3  # R1：回踩期量能对比窗口
 R1_APPROACH_PCT = 0.03  # R1：回踩须贴近 20 日线（近 5 日低点 ≤ MA20×1.03）
 R1_BREAK_PCT = 0.02  # R1：回踩可轻微下探，但不得跌破 MA20×0.98（破位≠回踩）
 R1_MAX_DIST_PCT = 0.05  # R1：当前价距 MA20 ≤ 5%（远离 = 追高，非站回）
+POSITION_MAX_RANGE = 0.5  # R3/R4：收盘须在近 20 日区间下半部（买下沿，不追中部）
 
 
 def _rsi_series(close: pd.Series, period: int = 14) -> pd.Series:
@@ -53,6 +54,30 @@ def _stop_target(entry: float, low: pd.Series) -> tuple[float, float]:
         stop = entry * STOP_MIN_RET
     target = entry + 2 * (entry - stop)
     return stop, target
+
+
+def _prior_low(lo: pd.Series, lookback: int = 20) -> float:
+    """截至今日的前 ``lookback`` 根 bar 的最低（不含今日；不足时用全部历史）。"""
+    win = lo.iloc[-(lookback + 1) : -1]
+    if len(win) == 0:
+        win = lo.iloc[:-1]
+    return float(win.min())
+
+
+def _range_position(
+    close: float, lo: pd.Series, hi: pd.Series, lookback: int = 20
+) -> float:
+    """收盘在近 ``lookback`` 日区间 [低, 高] 中的位置（0=下沿，1=上沿）。
+
+    用区间位置而非"距低点 %"：无量纲、不依赖绝对价位，直接对应手册/agent 的
+    "箱体下沿/中部/上沿"语言。跨零区间（span<=0）返回 1.0（视为追高）。
+    """
+    lo20 = _prior_low(lo, lookback)
+    hi20 = float(hi.iloc[-(lookback + 1) : -1].max())
+    span = hi20 - lo20
+    if span <= 0:
+        return 1.0
+    return (close - lo20) / span
 
 
 def r1_signal(bars: pd.DataFrame) -> dict | None:
@@ -114,8 +139,9 @@ def r2_signal(bars: pd.DataFrame) -> dict | None:
 
 
 def r3_signal(bars: pd.DataFrame) -> dict | None:
-    """R3 超跌反弹（震荡）：RSI14 < 30 后重新站上 30。"""
+    """R3 超跌反弹（震荡）：RSI14 < 30 后重新站上 30，且距近 20 日低点 ≤15%。"""
     close = bars["close"].astype(float)
+    lo = bars["low"].astype(float)
     rsi = _rsi_series(close)
     if len(rsi) < 6 or pd.isna(rsi.iloc[-1]):
         return None
@@ -123,17 +149,20 @@ def r3_signal(bars: pd.DataFrame) -> dict | None:
         return None  # 近 5 日从未超卖
     if rsi.iloc[-1] <= RSI_OVERSOLD:
         return None  # 尚未站回 30
-    stop, target = _stop_target(float(close.iloc[-1]), bars["low"].astype(float))
+    close_now = float(close.iloc[-1])
+    if _range_position(close_now, lo, bars["high"].astype(float)) > POSITION_MAX_RANGE:
+        return None  # 收盘在区间上半部 = 追高（Pilot 实测 +44% 是追高位，非超跌反弹）
+    stop, target = _stop_target(close_now, lo)
     return {
         "reason": "R3",
-        "entry_ref": float(close.iloc[-1]),
+        "entry_ref": close_now,
         "stop": stop,
         "target": target,
     }
 
 
 def r4_signal(bars: pd.DataFrame) -> dict | None:
-    """R4 缩量企稳（震荡）：回调 ≥5 日 + 缩量（<前5日均量×0.7）+ 收阳。"""
+    """R4 缩量企稳（震荡）：回调 ≥5 日 + 缩量（<前5日均量×0.7）+ 收阳 + 距低点 ≤15%。"""
     c = bars["close"].astype(float)
     o = bars["open"].astype(float)
     v = bars["volume"].astype(float)
@@ -148,6 +177,8 @@ def r4_signal(bars: pd.DataFrame) -> dict | None:
         return None  # 未缩量
     if close <= open_:
         return None  # 未收阳
+    if _range_position(close, lo, bars["high"].astype(float)) > POSITION_MAX_RANGE:
+        return None  # 收盘在区间上半部 = 追反弹，非下沿企稳（Pilot 实测 箱体中部）
     stop, target = _stop_target(close, lo)
     return {"reason": "R4", "entry_ref": close, "stop": stop, "target": target}
 
