@@ -123,10 +123,17 @@ def run_agent_decision(
     decision_date: str,
     max_iter: int = 16,
     signal_close: float = 0.0,
+    prompt: str | None = None,
 ) -> dict:
-    """在一个历史决策日跑一次 agent 研究，返回 memo + 解析 + 成本指标。"""
+    """在一个历史决策日跑一次 agent 研究，返回 memo + 解析 + 成本指标。
+
+    ``prompt`` 缺省用标准备忘录提示词；传入自定义 prompt（如恐慌事件评估）
+    时按自定义研究。
+    """
     agent = _build_agent(decision_date, max_iter)
-    result = agent.run(user_message=_memo_prompt(symbol, name, decision_date))
+    if prompt is None:
+        prompt = _memo_prompt(symbol, name, decision_date)
+    result = agent.run(user_message=prompt)
     content = result.get("content", "") or ""
     run_dir = result.get("run_dir", "")
     plan, reason = parse_memo(content, symbol, decision_date, signal_close)

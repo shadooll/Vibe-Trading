@@ -190,3 +190,45 @@ def r1r4_signal(bars: pd.DataFrame, regime: str) -> dict | None:
     if regime in (REGIME_RANGE, REGIME_BEAR):
         return r3_signal(bars) or r4_signal(bars)
     return None
+
+
+# ── 恐慌修复（quant_lab 已验证规则 R1 v5，2026-06-13）──────────────────────────
+PANIC_RET5 = -0.05  # 5 日跌幅 > 5%（core：什么算恐慌）
+PANIC_RET20 = -0.10  # 20 日跌幅 > 10%（context：已累计下跌）
+PANIC_MKT_RET20 = -0.05  # 大盘 20 日跌幅 > 5%（context：全市场恐慌）
+PANIC_VOL_RATIO = 1.0  # 量比 > 1（core：放量恐慌；不放量的下跌 = 有序出货）
+PANIC_TAKE_PROFIT = 1.10  # 止盈 +10%（v5 扫参从 +5% 得出）
+PANIC_STOP = 0.88  # 止损 -12%（v5 扫参从 -8% 得出）
+PANIC_HOLD_DAYS = 20  # 兜底持仓上限
+
+
+def panic_reversal_signal(bars: pd.DataFrame, market_ret20: float) -> dict | None:
+    """恐慌修复（LONG 反转）：ret5 < -5% + 放量 + 大盘恐慌 + ret20 < -10%。
+
+    规则来源：quant_lab 已验证的 panic_reversal_v5（HS300, 2019-2024, WR 63.9%,
+    均值 +3.16% 动态退出）。行为根基 S1：损失厌恶 + 羊群效应导致的恐慌过度反应。
+    本实现用绝对价位近似其滚动 ret5>10% 止盈（ExecutionSimulator 是价位触发）；
+    放量用 量比>1 近似其 vol_ratio>0。
+    """
+    c = bars["close"].astype(float)
+    v = bars["volume"].astype(float)
+    if len(c) < 21 or len(v) < 6:
+        return None
+    close = float(c.iloc[-1])
+    ret5 = close / float(c.iloc[-6]) - 1
+    ret20 = close / float(c.iloc[-21]) - 1
+    if ret5 >= PANIC_RET5:
+        return None  # 5 日跌幅不足
+    if ret20 >= PANIC_RET20:
+        return None  # 尚未累计下跌
+    vol_ma5 = float(v.iloc[-6:-1].mean())
+    if vol_ma5 <= 0 or float(v.iloc[-1]) < vol_ma5 * PANIC_VOL_RATIO:
+        return None  # 未放量（有序出货，排除）
+    if market_ret20 >= PANIC_MKT_RET20:
+        return None  # 大盘未恐慌（单票恐慌可交易性差）
+    return {
+        "reason": "PANIC",
+        "entry_ref": close,
+        "stop": round(close * PANIC_STOP, 2),
+        "target": round(close * PANIC_TAKE_PROFIT, 2),
+    }

@@ -140,7 +140,13 @@ class TradePlan:
                     reasons.append("target_price 必须 > 入场价")
 
             rr = self.rr
-            if rr is not None and rr < MIN_RR:
+            if (
+                rr is not None
+                and rr < MIN_RR
+                and not self.metadata.get(
+                    "skip_rr"
+                )  # 高胜率低赔率规则（如恐慌修复 WR~64%）
+            ):
                 reasons.append(f"R:R={rr:.2f} < {MIN_RR} (G7)")
 
             risk = self.risk_pct
