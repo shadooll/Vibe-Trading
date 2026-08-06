@@ -9,7 +9,7 @@
     execution.py  A 股纸面交易模拟器（一份计划 + 行情 -> 已实现盈亏）
     gate.py       G1-G8 决策闸（从手册编码的确定性过滤器）
     pit.py        PIT 无幸存者抽样 + as-of 数据包生成器（已实现）
-    stats.py      功效分析 + 配对 bootstrap/Wilcoxon（计划中）
+    stats.py      功效分析 + 配对 bootstrap/Wilcoxon + 三档门禁（已实现）
     cli.py        统一命令行入口（计划中）
 
 数据输出不落在这里——数据归数据，输出到 export_trade_data/ 下。
@@ -30,6 +30,22 @@ from trade_tools.pit import (
     regime_stratum,
     sample_points,
 )
+from trade_tools.stats import (
+    BOOT_SEED,
+    DEFAULT_ALPHA,
+    DEFAULT_BOOT_ALPHA,
+    DEFAULT_COST_FLOOR,
+    DEFAULT_N_BOOT,
+    DEFAULT_POWER,
+    TRIMMED_MEAN_PCT,
+    WILCOXON_EXACT_N,
+    effect_summary,
+    gate_verdict,
+    paired_bootstrap_ci,
+    power_table,
+    required_n,
+    wilcoxon_p,
+)
 
 __all__ = [
     "TradePlan",
@@ -47,4 +63,18 @@ __all__ = [
     "regime_at",
     "regime_stratum",
     "sample_points",
+    "DEFAULT_ALPHA",
+    "DEFAULT_POWER",
+    "DEFAULT_COST_FLOOR",
+    "DEFAULT_BOOT_ALPHA",
+    "DEFAULT_N_BOOT",
+    "BOOT_SEED",
+    "TRIMMED_MEAN_PCT",
+    "WILCOXON_EXACT_N",
+    "required_n",
+    "power_table",
+    "paired_bootstrap_ci",
+    "wilcoxon_p",
+    "effect_summary",
+    "gate_verdict",
 ]

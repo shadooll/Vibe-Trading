@@ -11,7 +11,7 @@
 | `execution.py` | A股纸面交易模拟器：T+1、涨跌停、停牌、gap、盘中触发、时间止损、tick 滑点、费用 | 手册环⑤⑥、`track_b_plan.md` §三·3 |
 | `gate.py` | G1-G8 决策闸：确定性过滤器（含创业板/科创板/北交所禁买） | 手册第二条链 |
 | `pit.py` | PIT 无幸存者抽样 + as-of 数据包生成器（regime 判定、宇宙过滤、分层抽样、数据包） | `track_b_plan.md` §三·1/§三·2 |
-| `stats.py` | 功效分析 + 配对 bootstrap/Wilcoxon | **计划中** |
+| `stats.py` | 功效分析 + 配对 bootstrap/Wilcoxon + 三档门禁 | `track_b_plan.md` §三·4/§三·5 |
 | `cli.py` | 统一命令行入口 | **计划中** |
 
 ## 用法
@@ -67,4 +67,7 @@ print(result.exit_reason, result.entry_price, result.exit_price,
   与 `daily_check.py` 同一口径（MA200 + MA60）；`UniverseFilter` 做主板/ST(近似)/
   上市≥3年/成交额/停牌过滤，全部只用 <= 决策日的数据；`sample_points` 固定 seed 分层
   抽样（层内间距 ≥ 60 交易日）；`build_data_pack` 出可直接 JSON 落盘的数据包。
-- **`stats.py` / `cli.py` 落地后**：功效分析、门禁判定和统一命令行入口也在这里。
+- **`stats.py`**：功效分析（`required_n`/`power_table`）、配对 bootstrap CI
+  + Wilcoxon 符号秩、主端点描述统计（`effect_summary`）和三档门禁
+  （`gate_verdict`：通过 / 放弃 / 证据不足）。**只用 numpy + 标准库
+  `statistics`**，不引 scipy。`cli.py` 落地后统一命令行入口也在这里。
