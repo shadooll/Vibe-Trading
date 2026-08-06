@@ -148,6 +148,14 @@ def run_agent_decision(
 
 
 def main(argv: list[str] | None = None) -> int:
+    import sys
+
+    # Windows 控制台默认 GBK，备忘录里的 ✓ 等字符会崩打印——stdout 重配为 UTF-8。
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):  # noqa: BLE001
+        pass
+
     parser = argparse.ArgumentParser(
         prog="trade_tools.agent_run",
         description="Phase 2b as-of agent 研究（单个历史决策点）",

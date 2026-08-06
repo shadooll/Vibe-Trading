@@ -51,30 +51,33 @@ _META_RE = re.compile(
     r"(不再调用工具|以现有已验证证据|收到，|收到\.|开始输出|即将输出备忘录)",
     re.MULTILINE,
 )
-# 结构化决策字段：优先"决策结论：X"行，其次"### 结论\nX"小节（pilot 实测：全文扫
-# 会把标题里的"买入/不买入"误判成买意图——决策必须从小节读，不扫全文）。
-_FINAL_DECISION_RE = re.compile(r"决策结论[：:]?\s*(买|不买|观望)", re.MULTILINE)
-_SECTION_DECISION_RE = re.compile(r"#{1,4}\s*结论[^\n]*\n\s*([^\n]+)", re.MULTILINE)
-_STOP_RE = re.compile(r"止损[:：]?\s*(\d+(?:\.\d+)?)")
-_TARGET_RE = re.compile(r"目标[:：]?\s*(\d+(?:\.\d+)?)")
-_POSITION_RE = re.compile(r"仓位[:：]?\s*(\d+(?:\.\d+)?)\s*%")
+# 结构化决策字段：优先"决策(结论)：买/买入"行，其次"### 结论\nX"小节。
+# 处理真实输出的变体（Pilot 实测）：加粗 **买**、"决策：买入"、"买 —— 说明"。
+_FINAL_DECISION_RE = re.compile(r"决策[：:]?\s*\**\s*(买|不买|观望|买入)", re.MULTILINE)
+_SECTION_DECISION_RE = re.compile(
+    r"#{1,4}\s*结论[^\n]*\n\s*\**\s*([^\n*]+)", re.MULTILINE
+)
+_STOP_RE = re.compile(r"止损[:：]?\s*\**\s*(\d+(?:\.\d+)?)")
+_TARGET_RE = re.compile(r"目标[:：]?\s*\**\s*(\d+(?:\.\d+)?)")
+_POSITION_RE = re.compile(r"(?:仓位|≈)[:：]?\s*\**\s*(\d+(?:\.\d+)?)\s*%")
 
 
 def _extract_decision(text: str) -> str | None:
     """从结构化决策字段读 buy / no_buy；未给出返回 None。
 
-    顺序：① ``决策结论：买/不买`` 行；② ``### 结论`` 小节的第一行。两处都无 =
-    未给出结论（元话语 / 解析失败）。
+    顺序：① ``决策(结论)：买/买入`` 行；② ``### 结论`` 小节的第一行。两处都无 =
+    未给出结论（元话语 / 解析失败）。加粗标记（``**买**``）与"买 —— 说明"均处理。
     """
     m = _FINAL_DECISION_RE.search(text)
     if m:
-        return "buy" if m.group(1) == "买" else "no_buy"
+        g = m.group(1)
+        return "buy" if g.startswith("买") else "no_buy"
     m = _SECTION_DECISION_RE.search(text)
     if m:
         line = m.group(1).strip()
-        if "不买" in line or "观望" in line or "不买" in line:
+        if line.startswith("不买") or line.startswith("观望"):
             return "no_buy"
-        if line == "买" or "买入" in line or "可买" in line:
+        if line.startswith("买"):
             return "buy"
     return None
 
