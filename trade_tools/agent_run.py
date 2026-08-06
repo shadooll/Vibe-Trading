@@ -28,6 +28,7 @@ from typing import Any
 
 from src.agent.tools import BaseTool, ToolRegistry
 
+from trade_tools.execution import ExecutionSimulator
 from trade_tools.pilot import _noop, _read_tokens, parse_memo
 
 
@@ -130,6 +131,21 @@ def run_agent_decision(
     run_dir = result.get("run_dir", "")
     plan, reason = parse_memo(content, symbol, decision_date, signal_close)
     decision = plan.decision if plan is not None else f"解析失败:{reason}"
+
+    # 结算 agent 备忘录（若解析出合法 buy 计划）：同买入持有共用 ExecutionSimulator。
+    net_ret, exit_reason = 0.0, ""
+    if plan is not None and plan.decision == "buy":
+        try:
+            from trade_tools.run_trackb import fetch_point_bars
+
+            settle = ExecutionSimulator(fetch_point_bars(symbol, decision_date)).settle(
+                plan
+            )
+            net_ret = settle.net_ret if settle.realized else 0.0
+            exit_reason = settle.exit_reason
+        except Exception as exc:  # noqa: BLE001
+            net_ret, exit_reason = 0.0, f"结算失败:{exc}"
+
     return {
         "symbol": symbol,
         "decision_date": decision_date,
@@ -142,6 +158,8 @@ def run_agent_decision(
         "stop": plan.stop_price if plan is not None else None,
         "target": plan.target_price if plan is not None else None,
         "position_pct": plan.position_pct if plan is not None else None,
+        "net_ret": net_ret,
+        "exit_reason": exit_reason,
         "content": content,
         "run_dir": run_dir,
     }
