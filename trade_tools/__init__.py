@@ -8,7 +8,7 @@
     plan.py       结构化交易计划协议（决策 -> 可执行计划的契约）
     execution.py  A 股纸面交易模拟器（一份计划 + 行情 -> 已实现盈亏）
     gate.py       G1-G8 决策闸（从手册编码的确定性过滤器）
-    pit.py        PIT 无幸存者抽样 + as-of 数据包生成器（计划中）
+    pit.py        PIT 无幸存者抽样 + as-of 数据包生成器（已实现）
     stats.py      功效分析 + 配对 bootstrap/Wilcoxon（计划中）
     cli.py        统一命令行入口（计划中）
 
@@ -20,6 +20,16 @@ from __future__ import annotations
 from trade_tools.plan import TradePlan, ProtocolViolation
 from trade_tools.execution import ExecutionSimulator, SettlementResult
 from trade_tools.gate import GateContext, GateVerdict, gate
+from trade_tools.pit import (
+    Point,
+    UniverseFilter,
+    UniverseVerdict,
+    build_data_pack,
+    compute_snapshot,
+    regime_at,
+    regime_stratum,
+    sample_points,
+)
 
 __all__ = [
     "TradePlan",
@@ -29,4 +39,12 @@ __all__ = [
     "GateContext",
     "GateVerdict",
     "gate",
+    "Point",
+    "UniverseFilter",
+    "UniverseVerdict",
+    "build_data_pack",
+    "compute_snapshot",
+    "regime_at",
+    "regime_stratum",
+    "sample_points",
 ]
