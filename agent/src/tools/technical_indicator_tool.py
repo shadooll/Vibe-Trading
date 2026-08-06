@@ -99,6 +99,41 @@ def _compute_bollinger(
     }
 
 
+def _to_dataframe(obj: Any) -> pd.DataFrame | None:
+    """Normalize ``fetch_market_data`` output into a DataFrame.
+
+    ``fetch_market_data`` returns one of three shapes per symbol: a list of
+    row dicts (no truncation), a ``cap_rows`` wrapper dict ``{rows, returned,
+    truncated, policy, hint, data}`` (when truncated), or — for other callers —
+    a raw DataFrame. Accept all three, and re-key dates onto the index so
+    ``close.index`` carries real timestamps.
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, pd.DataFrame):
+        df = obj
+    elif isinstance(obj, dict) and isinstance(obj.get("data"), list):
+        df = pd.DataFrame(obj["data"])
+    elif isinstance(obj, list):
+        df = pd.DataFrame(obj)
+    else:
+        return None
+    if df.empty:
+        return df
+    date_col = next(
+        (c for c in df.columns if str(c).lower() in ("date", "datetime", "trade_date", "day", "时间")),
+        None,
+    )
+    if date_col is not None:
+        try:
+            df = df.copy()
+            df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+            df = df.dropna(subset=[date_col]).set_index(date_col).sort_index()
+        except Exception:  # noqa: BLE001 — non-date index is a cosmetic loss only
+            pass
+    return df
+
+
 class TechnicalIndicatorTool(BaseTool):
     """Compute common technical indicators for a symbol.
 
@@ -166,30 +201,27 @@ class TechnicalIndicatorTool(BaseTool):
                 start_date=start_date,
                 end_date=end_date,
                 interval=interval,
-                max_rows=lookback,
+                # max_rows=0: fetch the full window without cap_rows sampling.
+                # The window (lookback*2 calendar days) bounds the bar count;
+                # sampling would silently distort SMA/RSI computed on the bars.
+                max_rows=0,
             )
         except Exception as exc:
             logger.debug("fetch_market_data failed for %s: %s", symbol, exc)
             return json.dumps({"ok": False, "error": f"Failed to fetch data: {exc}"})
 
-        df = data.get(symbol)
+        df = _to_dataframe(data.get(symbol))
         if df is None or df.empty:
             return json.dumps({"ok": False, "error": f"No data returned for {symbol}"})
 
-        close = df.get("close") if isinstance(df, pd.DataFrame) else None
-        if close is None:
-            # Some loaders return a dict-like structure; try common key names.
-            if hasattr(df, "to_dict"):
-                d = df.to_dict() if callable(df.to_dict) else dict(df)
-                for key in ("close", "Close", "CLOSE", "adj_close"):
-                    if key in d:
-                        close = pd.Series(d[key])
-                        break
-        if close is None:
+        close_col = next(
+            (c for c in ("close", "Close", "CLOSE", "adj_close") if c in df.columns), None
+        )
+        if close_col is None:
             return json.dumps({"ok": False, "error": "No close price column in data"})
-
-        if not isinstance(close, pd.Series):
-            close = pd.Series(close)
+        close = pd.to_numeric(df[close_col], errors="coerce").dropna()
+        if close.empty:
+            return json.dumps({"ok": False, "error": "No usable close prices in data"})
 
         # ── Compute indicators ────────────────────────────────────────────
         indicators: dict[str, Any] = {

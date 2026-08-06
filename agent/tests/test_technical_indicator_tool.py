@@ -220,3 +220,40 @@ class TestTechnicalIndicatorToolIntegration:
         assert result["indicators"]["bollinger"] is None
         # But SMA 20 should be null, SMA 50/200 null — only EMA 20 needs 20 bars, null too
         assert result["indicators"]["sma_20"] is None
+
+    def test_execute_accepts_list_of_row_dicts(self, monkeypatch, sample_df):
+        """fetch_market_data returns a list of row dicts (real no-truncation shape)."""
+        sample_df["date"] = sample_df.index
+        rows = sample_df.reset_index(drop=True).to_dict(orient="records")
+        monkeypatch.setattr(
+            "src.tools.technical_indicator_tool.fetch_market_data",
+            lambda **kw: {"AAPL": rows},
+        )
+        tool = TechnicalIndicatorTool()
+        result = json.loads(tool.execute(symbol="AAPL"))
+        assert result["ok"] is True
+        assert result["indicators"]["sma_20"] is not None
+        assert result["latest_close"] == 349.0
+
+    def test_execute_accepts_cap_rows_wrapper(self, monkeypatch, sample_close):
+        """fetch_market_data returns a cap_rows truncation wrapper dict."""
+        df = pd.DataFrame({"close": sample_close, "date": sample_close.index})
+        rows = df.reset_index(drop=True).to_dict(orient="records")
+        wrapper = {
+            "rows": len(rows),
+            "returned": len(rows),
+            "truncated": True,
+            "policy": "every-2th-row (even stride; last bar pinned)",
+            "hint": "narrow the date range",
+            "data": rows,
+        }
+        monkeypatch.setattr(
+            "src.tools.technical_indicator_tool.fetch_market_data",
+            lambda **kw: {"AAPL": wrapper},
+        )
+        tool = TechnicalIndicatorTool()
+        result = json.loads(tool.execute(symbol="AAPL"))
+        assert result["ok"] is True
+        assert result["indicators"]["sma_20"] is not None
+        assert result["indicators"]["sma_200"] is not None
+        assert result["latest_close"] == 349.0
