@@ -1,6 +1,7 @@
 """Tests for the technical indicator tool."""
 
 import json
+from datetime import datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -257,3 +258,96 @@ class TestTechnicalIndicatorToolIntegration:
         assert result["indicators"]["sma_20"] is not None
         assert result["indicators"]["sma_200"] is not None
         assert result["latest_close"] == 349.0
+
+    # ── end_date (as-of) 语义 ────────────────────────────────────────────
+
+    def test_execute_passes_as_of_dates_to_fetch(self, monkeypatch, sample_close):
+        """end_date 传入时，fetch_market_data 收到对应的 start_date/end_date。"""
+        captured = {}
+
+        def _mock_fetch(**kwargs):
+            captured.update(kwargs)
+            return {"AAPL": pd.DataFrame({"close": sample_close})}
+
+        monkeypatch.setattr(
+            "src.tools.technical_indicator_tool.fetch_market_data",
+            _mock_fetch,
+        )
+        tool = TechnicalIndicatorTool()
+        result = json.loads(tool.execute(symbol="AAPL", end_date="2024-12-31", lookback=200))
+        assert result["ok"] is True
+        assert captured["end_date"] == "2024-12-31"
+        expected_start = (datetime(2024, 12, 31) - timedelta(days=200 * 2)).strftime("%Y-%m-%d")
+        assert captured["start_date"] == expected_start
+        # 其余 fetch 参数与现状一致
+        assert captured["max_rows"] == 0
+        assert captured["interval"] == "1d"
+
+    def test_execute_historical_end_date_limits_latest_bar(self, monkeypatch, sample_close):
+        """历史 end_date：latest_close/latest_date 是 <= 该日的最后一根 bar。"""
+        sub = sample_close[sample_close.index <= "2024-12-31"]
+        monkeypatch.setattr(
+            "src.tools.technical_indicator_tool.fetch_market_data",
+            lambda **kw: {"AAPL": pd.DataFrame({"close": sub})},
+        )
+        tool = TechnicalIndicatorTool()
+        result = json.loads(tool.execute(symbol="AAPL", end_date="2024-12-31"))
+        assert result["ok"] is True
+        assert result["latest_date"] == sub.index[-1].strftime("%Y-%m-%d")
+        assert result["latest_date"] <= "2024-12-31"
+        assert result["latest_close"] == float(sub.iloc[-1])
+        # 250 bars 仍在窗口内 → 长周期指标可算
+        assert result["indicators"]["sma_200"] is not None
+
+    def test_execute_historical_end_date_truncates_series(self, monkeypatch, sample_close):
+        """as-of 截断：指标只基于 <= as-of 的 bar，而不是整条序列。"""
+        sub = sample_close[sample_close.index <= "2024-06-30"]
+        assert len(sub) < len(sample_close)  # 130 bars，确实被截断
+        monkeypatch.setattr(
+            "src.tools.technical_indicator_tool.fetch_market_data",
+            lambda **kw: {"AAPL": pd.DataFrame({"close": sub})},
+        )
+        tool = TechnicalIndicatorTool()
+        result = json.loads(tool.execute(symbol="AAPL", end_date="2024-06-30"))
+        assert result["ok"] is True
+        assert result["latest_date"] == "2024-06-28"
+        # 截断后不足 200 bar → SMA 200 为 null（证明指标只在截断序列上算）
+        assert result["indicators"]["sma_200"] is None
+
+    def test_execute_invalid_end_date_falls_back_to_today(self, monkeypatch, sample_close):
+        """非法格式 end_date → 回落今天（与缺省行为一致）。"""
+        calls = {}
+
+        def _mock_fetch(**kwargs):
+            calls.setdefault("end_dates", []).append(kwargs["end_date"])
+            calls.setdefault("starts", []).append(kwargs["start_date"])
+            return {"AAPL": pd.DataFrame({"close": sample_close})}
+
+        monkeypatch.setattr(
+            "src.tools.technical_indicator_tool.fetch_market_data",
+            _mock_fetch,
+        )
+        tool = TechnicalIndicatorTool()
+        r_bad = json.loads(tool.execute(symbol="AAPL", end_date="not-a-date"))
+        r_default = json.loads(tool.execute(symbol="AAPL"))
+        assert r_bad["ok"] is True and r_default["ok"] is True
+        assert calls["end_dates"][0] == calls["end_dates"][1]
+        assert calls["starts"][0] == calls["starts"][1]
+
+    def test_execute_future_end_date_clamped_to_today(self, monkeypatch, sample_close):
+        """未来日期 end_date → 钳到今天（与缺省行为一致）。"""
+        calls = {}
+
+        def _mock_fetch(**kwargs):
+            calls.setdefault("end_dates", []).append(kwargs["end_date"])
+            return {"AAPL": pd.DataFrame({"close": sample_close})}
+
+        monkeypatch.setattr(
+            "src.tools.technical_indicator_tool.fetch_market_data",
+            _mock_fetch,
+        )
+        tool = TechnicalIndicatorTool()
+        r_future = json.loads(tool.execute(symbol="AAPL", end_date="2099-01-01"))
+        r_default = json.loads(tool.execute(symbol="AAPL"))
+        assert r_future["ok"] is True and r_default["ok"] is True
+        assert calls["end_dates"][0] == calls["end_dates"][1]

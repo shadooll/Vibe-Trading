@@ -134,6 +134,29 @@ def _to_dataframe(obj: Any) -> pd.DataFrame | None:
     return df
 
 
+def _resolve_as_of(raw: Any) -> str:
+    """Normalize the optional ``end_date`` argument to a ``YYYY-MM-DD`` string.
+
+    空值/缺省 → 今天；非法格式 → 今天并记日志；未来日期 → 钳到今天。
+    返回的字符串可直接用作 ``fetch_market_data`` 的 ``end_date``。
+    """
+    if raw is None:
+        return datetime.now().strftime("%Y-%m-%d")
+    value = str(raw).strip()
+    if not value:
+        return datetime.now().strftime("%Y-%m-%d")
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        logger.warning("invalid end_date %r, falling back to today", value)
+        return datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now().date()
+    if parsed.date() > today:
+        logger.warning("end_date %s is in the future, clamping to today", value)
+        return today.strftime("%Y-%m-%d")
+    return parsed.strftime("%Y-%m-%d")
+
+
 class TechnicalIndicatorTool(BaseTool):
     """Compute common technical indicators for a symbol.
 
@@ -171,6 +194,15 @@ class TechnicalIndicatorTool(BaseTool):
                 ),
                 "default": _DEFAULT_LOOKBACK,
             },
+            "end_date": {
+                "type": "string",
+                "description": (
+                    "As-of date YYYY-MM-DD (optional). When given, prices and "
+                    "all indicators are computed only up to this date; defaults "
+                    "to today. Future dates are clamped to today."
+                ),
+                "default": "",
+            },
         },
         "required": ["symbol"],
     }
@@ -191,9 +223,11 @@ class TechnicalIndicatorTool(BaseTool):
             lookback = _DEFAULT_LOOKBACK
         lookback = max(10, min(lookback, _MAX_LOOKBACK))
 
-        # Fetch enough bars to cover the longest indicator window + buffer.
-        end_date = datetime.now().strftime("%Y-%m-%d")
-        start_date = (datetime.now() - timedelta(days=lookback * 2)).strftime("%Y-%m-%d")
+        # Fetch enough bars to cover the longest indicator window + buffer,
+        # anchored at the resolved as-of date (defaults to today).
+        end_date = _resolve_as_of(kwargs.get("end_date"))
+        as_of = datetime.strptime(end_date, "%Y-%m-%d")
+        start_date = (as_of - timedelta(days=lookback * 2)).strftime("%Y-%m-%d")
 
         try:
             data = fetch_market_data(
