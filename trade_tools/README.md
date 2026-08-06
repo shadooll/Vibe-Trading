@@ -13,6 +13,7 @@
 | `pit.py` | PIT 无幸存者抽样 + as-of 数据包生成器（regime 判定、宇宙过滤、分层抽样、数据包） | `track_b_plan.md` §三·1/§三·2 |
 | `rules.py` | R1-R4 确定性入场理由引擎（手册环③编码；止损/目标按环④口径） | 手册环③④ |
 | `validation.py` | Track B 验证流水线：对照臂（买入持有/R1-R4）+ 逐点结算 + 配对差 + 门禁报告 | `track_b_plan.md` §三·4/§三·5 |
+| `agent_run.py` | **Phase 2b 沙箱**：历史决策点的 as-of agent 研究（工具日期强制锚死到决策日，只注册 as-of 安全工具）| `track_b_plan.md` §三·1 |
 | `stats.py` | 功效分析 + 配对 bootstrap/Wilcoxon + 三档门禁 | `track_b_plan.md` §三·4/§三·5 |
 | `cli.py` | 统一命令行入口 | 本文件（见下方「命令行」） |
 
