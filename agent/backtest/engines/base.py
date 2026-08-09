@@ -357,6 +357,24 @@ def _maybe_enrich_events(
         ) from exc
 
 
+# ─── Causality mode resolution ───
+
+
+def _resolve_causality_mode(config: Dict[str, Any]) -> str:
+    """Resolve the causality_check mode: 'fail' (default) | 'warn' | 'off'.
+
+    Accepts either a bare string or a dict whose ``mode`` key carries it.
+    The default is deliberately fail-closed: it is the one behaviour change
+    that blocks a cheating engine, and a legacy verified strategy can opt out
+    explicitly with ``"off"``.
+    """
+    raw = config.get("causality_check", "fail")
+    if isinstance(raw, dict):
+        raw = raw.get("mode", "fail")
+    raw = str(raw).strip().lower()
+    return raw if raw in ("fail", "warn", "off") else "fail"
+
+
 # ─── Base Engine ───
 
 
@@ -393,6 +411,8 @@ class BaseEngine(ABC):
         self.equity_snapshots: List[EquitySnapshot] = []
         self._bar_idx: int = 0
         self._active_symbol: str = ""  # set by _rebalance/_close_position for subclass use
+        #: Signal-causality verdict for the most recent run (see run_backtest 2b).
+        self._causality_report: Dict[str, Any] = {}
 
     # ── Market rule interface (subclass must implement) ──
 
@@ -671,6 +691,45 @@ class BaseEngine(ABC):
         if not valid_codes:
             print(json.dumps({"error": "No valid signals generated"}))
             sys.exit(1)
+
+        # 2b. Signal-level causality check (default fail-closed). The check
+        # compares the full-data signal against a truncated-data signal at the
+        # same timestamps; a disagreement means generate() used future data,
+        # which the _align shift cannot wash out. It runs on the SAME enriched
+        # map execution consumes, and reuses the single ``signal_map`` already
+        # computed above (no second full generate). Options runs don't pass
+        # through here (their engine returns instruction lists, not Series).
+        causality_mode = _resolve_causality_mode(config)
+        if causality_mode != "off":
+            from backtest.causality import check_signal_causality
+            cc_cfg = config.get("causality_check")
+            cc_cfg = cc_cfg if isinstance(cc_cfg, dict) else {}
+            cc = check_signal_causality(
+                signal_engine,
+                data_map,
+                signal_map,
+                points_per_symbol=int(cc_cfg.get("points_per_symbol", 5)),
+                tol=float(cc_cfg.get("tol", 1e-9)),
+                min_bars=int(cc_cfg.get("min_bars", 200)),
+                skip_warmup_bars=cc_cfg.get("skip_warmup_bars"),
+                max_points=int(cc_cfg.get("max_points", 25)),
+                seed=int(cc_cfg.get("seed", 42)),
+            )
+            self._causality_report = cc
+            if cc["verdict"] == "FAIL":
+                msg = (
+                    "Signal causality check FAILED: generate() used future data "
+                    f"(first leak: {cc['leaks'][0] if cc['leaks'] else 'unknown'}). "
+                    "Set causality_check='warn' to log-only or 'off' to disable."
+                )
+                if causality_mode == "fail":
+                    print(json.dumps({"error": msg}))
+                    sys.exit(1)
+                print(f"[WARN] {msg}")
+            elif cc["verdict"] == "SKIP":
+                print(f"[WARN] Signal causality check skipped: {cc['reason']}")
+        else:
+            self._causality_report = {"verdict": "OFF", "reason": "disabled"}
 
         # 3. Pre-compute target weights (with optimizer)
         opt_fn = _load_optimizer(config)
