@@ -15,12 +15,239 @@ import json
 import math
 from numbers import Integral, Real
 from pathlib import Path
-from typing import Any, Dict, List
+from statistics import NormalDist
+from typing import Any, Dict, List, Sequence
 
 import numpy as np
 import pandas as pd
 
 from backtest.models import TradeRecord
+
+_EULER_MASCHERONI = 0.5772156649
+
+
+# ─── Deflated Sharpe Ratio ───
+
+
+def deflated_sharpe_ratio(
+    trial_scores: Sequence[float],
+    daily_returns: Sequence[float],
+    bars_per_year: int,
+    mode: str = "oos",
+    seed: int = 42,
+) -> Dict[str, Any]:
+    """Deflated Sharpe Ratio (Bailey & López de Prado).
+
+    Answers the question the plain Sharpe cannot: *is this result skill, or the
+    best of N lucky trials?* The agent IS the optimizer here — it edits, reruns,
+    and hands over the best variant — so the observed Sharpe must be deflated by
+    the search that produced it.
+
+    Algorithm (faithful to EP004 ``deflated_sharpe.py``):
+      - ``sr_var = var(trial_scores, ddof=1)`` — spread of the search's scores.
+      - Luck baseline daily Sharpe
+        ``sr0 = sqrt(sr_var / bars_per_year) * ((1-γ)·Φ⁻¹(1-1/N) + γ·Φ⁻¹(1-1/(N·e)))``.
+      - Observed daily Sharpe from the strategy's own daily returns.
+      - Non-normality correction via skew ``g3`` and kurtosis ``g4 = kurt + 3``:
+        ``denom = 1 - g3·sr + (g4-1)/4 · sr²``; ``z = (sr - sr0)·√(T-1)/√denom``;
+        ``DSR = Φ(z)``.
+
+    Args:
+        trial_scores: One objective score per trial of the search (recommended:
+            ``valid_sharpe``). ``N = len(trial_scores)``.
+        daily_returns: The SELECTED strategy's daily equity returns (not annualised).
+        bars_per_year: The SAME annualisation factor the scores used — crypto/forex
+            365, A-share 252. Never hard-default 252: it inflates crypto's sr0 by
+            √(365/252)≈1.20 and biases DSR low (review M2).
+        mode: "oos" (default; requires out-of-sample scores) or "train_only"
+            (explicit escape; the result is flagged in-sample / inflated).
+        seed: Unused for the math (deterministic); kept for a stable signature.
+
+    Returns:
+        Dict with n_trials, sr_var, observed_sharpe_annual, sr0_annual, T_days,
+        skew, kurtosis, DSR, verdict, reason, authoritative. DSR is None when not
+        computable (N<2, T<30, zero variance, non-positive denom) — never raises.
+    """
+    del seed  # deterministic; signature stability only
+    result: Dict[str, Any] = {
+        "n_trials": 0,
+        "sr_var": None,
+        "observed_sharpe_annual": None,
+        "sr0_annual": None,
+        "T_days": 0,
+        "skew": None,
+        "kurtosis": None,
+        "DSR": None,
+        "verdict": "unavailable",
+        "reason": "",
+        "authoritative": True,
+    }
+
+    if mode == "train_only":
+        result["mode"] = "train_only"
+        result["in_sample"] = True
+    elif mode != "oos":
+        result["reason"] = f"unknown mode {mode!r}"
+        result["authoritative"] = False
+        return result
+
+    scores = np.asarray([s for s in trial_scores if s is not None], dtype=float)
+    scores = scores[np.isfinite(scores)]
+    N = len(scores)
+    result["n_trials"] = N
+    if N < 2:
+        result["reason"] = f"need >= 2 trials, got {N}"
+        return result
+
+    rets = pd.Series(list(daily_returns), dtype=float).replace([np.inf, -np.inf], np.nan).dropna()
+    T = len(rets)
+    result["T_days"] = T
+    if T < 30:
+        result["reason"] = f"need >= 30 daily returns, got {T}"
+        return result
+
+    std = float(rets.std())  # ddof=1
+    # Near-zero std (e.g. a constant-return series whose ddof=1 std is a float
+    # residue like 6.5e-19, not exactly 0) is still a zero-variance path: the
+    # Sharpe denominator is meaningless and DSR must not divide by it.
+    mean_abs = float(rets.abs().mean())
+    if std <= 0 or not math.isfinite(std) or std < max(1e-12, mean_abs * 1e-6):
+        result["reason"] = "daily returns have zero/non-finite variance"
+        return result
+
+    sr_var = float(np.var(scores, ddof=1))
+    result["sr_var"] = sr_var
+
+    norm = NormalDist()
+    sr0_daily = math.sqrt(sr_var / bars_per_year) * (
+        (1 - _EULER_MASCHERONI) * norm.inv_cdf(1 - 1 / N)
+        + _EULER_MASCHERONI * norm.inv_cdf(1 - 1 / (N * math.e))
+    )
+    result["sr0_annual"] = sr0_daily * math.sqrt(bars_per_year)
+
+    sr_daily = float(rets.mean()) / std
+    result["observed_sharpe_annual"] = sr_daily * math.sqrt(bars_per_year)
+
+    g3 = float(rets.skew())
+    g4 = float(rets.kurt()) + 3.0  # pandas kurt is excess kurtosis
+    result["skew"] = g3
+    result["kurtosis"] = g4
+
+    denom = 1 - g3 * sr_daily + (g4 - 1) / 4 * sr_daily**2
+    if denom <= 0 or not math.isfinite(denom):
+        result["reason"] = f"non-positive denominator ({denom:.4g})"
+        return result
+
+    z = (sr_daily - sr0_daily) * math.sqrt(T - 1) / math.sqrt(denom)
+    dsr = norm.cdf(z)
+    result["DSR"] = dsr
+
+    if mode == "train_only":
+        result["verdict"] = "in_sample"
+        result["reason"] = "train-only mode: in-sample, inflated, not an out-of-sample conclusion"
+    elif dsr >= 0.95:
+        result["verdict"] = "significant"
+    elif dsr >= 0.90:
+        result["verdict"] = "weak"
+    else:
+        result["verdict"] = "not_significant"
+    return result
+
+
+# ─── Block Bootstrap Monte Carlo ───
+
+
+def block_bootstrap(
+    returns: Sequence[float],
+    n_bootstrap: int = 5000,
+    block: int = 10,
+    start: float = 1000.0,
+    seed: int = 7,
+    keep_paths: int = 400,
+) -> Dict[str, Any]:
+    """Block-bootstrap resampling → terminal-value distribution + prob(profit).
+
+    Unlike the permutation test (which shuffles PnL and destroys the serial
+    correlation of a trend strategy's win/loss runs) or the i.i.d. bootstrap,
+    this resamples CONTIGUOUS blocks, preserving short-range autocorrelation
+    (EP004 ``mc_bootstrap.py``, block=10). Output is the terminal equity
+    distribution: prob(profit), P5/P50/P95 — the most direct answer to "how
+    much of this curve is luck".
+
+    Args:
+        returns: Per-period returns. DEFAULT is day-level equity returns
+            (``equity_curve.pct_change().dropna()``) — the portfolio-equity
+            measure that matches ``calc_metrics``' Sharpe. Trade-level
+            (``pnl / entry_margin``) is a per-margin return: overlapping or
+            leveraged books OVERSTATE path variance, so scale by
+            ``entry_margin / equity_at_entry`` first or treat it as an accepted
+            approximation (review M4).
+        n_bootstrap: Number of resampled paths.
+        block: Block length; ``block=1`` degenerates to i.i.d. bootstrap.
+        start: Starting equity for path reconstruction.
+        seed: Random seed (reproducible via ``np.random.default_rng``).
+        keep_paths: How many full paths to retain for the fan chart.
+
+    Returns:
+        Dict with n, iters, block, prob_profit, orig_final, final_P5/P50/P95,
+        mean_ret, equity_paths (fan-chart payload aligned to ``monte_carlo_test``).
+    """
+    rets = np.asarray(list(returns), dtype=float)
+    rets = rets[np.isfinite(rets)]
+    N = len(rets)
+    if N < 5:
+        return {"error": f"need at least 5 return observations, got {N}", "n": N}
+
+    if block < 1:
+        block = 1
+    if N < block:
+        block = max(1, N // 2)
+
+    rng = np.random.default_rng(seed)
+    finals = np.empty(n_bootstrap)
+    # Retain up to keep_paths full paths for the fan chart; downsample path
+    # length to <=400 points (aligned to monte_carlo_test's payload).
+    n_keep = min(keep_paths, n_bootstrap, 30)
+    kept = np.empty((n_keep, N))
+
+    max_start = max(1, N - block + 1)
+    for i in range(n_bootstrap):
+        idx: list[int] = []
+        while len(idx) < N:
+            s = int(rng.integers(0, max_start))
+            idx.extend(range(s, min(s + block, N)))
+        idx = idx[:N]
+        eq = start * np.cumprod(1.0 + rets[idx])
+        finals[i] = eq[-1]
+        if i < n_keep:
+            kept[i] = eq
+
+    orig_final = float(start * np.cumprod(1.0 + rets)[-1])
+
+    result: Dict[str, Any] = {
+        "n": N,
+        "iters": n_bootstrap,
+        "block": block,
+        "prob_profit": round(float(np.mean(finals > start)), 4),
+        "orig_final": round(orig_final, 2),
+        "final_P5": round(float(np.percentile(finals, 5)), 2),
+        "final_P50": round(float(np.percentile(finals, 50)), 2),
+        "final_P95": round(float(np.percentile(finals, 95)), 2),
+        "mean_ret": round(float(rets.mean()), 8),
+    }
+
+    # Fan-chart payload: downsample along steps (<=400) and along paths (<=30).
+    col_idx = np.unique(np.linspace(0, N - 1, min(N, 400)).astype(int))
+    result["equity_paths"] = {
+        "steps": (col_idx + 1).tolist(),
+        "start": round(float(start), 2),
+        "actual": np.round((start * np.cumprod(1.0 + rets))[col_idx], 2).tolist(),
+        "band_p5": np.round(np.percentile(kept[:, col_idx], 5, axis=0), 2).tolist(),
+        "band_p50": np.round(np.percentile(kept[:, col_idx], 50, axis=0), 2).tolist(),
+        "band_p95": np.round(np.percentile(kept[:, col_idx], 95, axis=0), 2).tolist(),
+        "samples": np.round(kept[:, col_idx], 2).tolist(),
+    }
+    return result
 
 
 # ─── Monte Carlo Permutation Test ───
@@ -337,6 +564,31 @@ def run_validation(
             n_windows=wf_cfg.get("n_windows", 5),
             bars_per_year=bars_per_year,
         )
+
+    if "block_bootstrap" in v_cfg:
+        bb_cfg = v_cfg["block_bootstrap"] if isinstance(v_cfg["block_bootstrap"], dict) else {}
+        unit = bb_cfg.get("unit", "day")
+        if unit == "trade":
+            # Per-margin returns — OVERSTATES variance under overlap/leverage
+            # (review M4); flagged as the accepted approximation.
+            rets = [
+                t.pnl / t.entry_margin
+                for t in trades
+                if getattr(t, "entry_margin", 0) and t.entry_margin > 0
+            ]
+        else:
+            rets = equity_curve.pct_change().dropna().values.tolist()
+        bb = block_bootstrap(
+            rets,
+            n_bootstrap=bb_cfg.get("iters", 5000),
+            block=bb_cfg.get("block", 10),
+            start=bb_cfg.get("start", 1000.0),
+            seed=bb_cfg.get("seed", 7),
+        )
+        if unit == "trade":
+            bb["unit"] = "trade"
+            bb["approximation"] = "per-margin returns; overlap/leverage not accounted"
+        results["block_bootstrap"] = bb
 
     return results
 
