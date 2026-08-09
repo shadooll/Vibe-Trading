@@ -187,8 +187,8 @@ class GlobalFuturesEngine(FuturesBaseEngine):
         asymmetry on short positions.
         """
         if self._comm_override is not None:
-            return size * self._comm_override
-        return self.calc_commission_for_symbol(self._active_symbol, size, price, is_open)
+            return size * self._comm_override * self.cost_scale
+        return self.calc_commission_for_symbol(self._active_symbol, size, price, is_open) * self.cost_scale
 
     def calc_commission_for_symbol(
         self, symbol: str, size: float, price: float, is_open: bool,
@@ -210,7 +210,7 @@ class GlobalFuturesEngine(FuturesBaseEngine):
 
     def apply_slippage(self, price: float, direction: int) -> float:
         """Slippage model for liquid global futures."""
-        return price * (1 + direction * self.slippage_rate)
+        return price * (1 + direction * self.slippage_rate * self.cost_scale)
 
     def get_contract_multiplier(self, symbol: str) -> float:
         """Product-specific contract multiplier."""

@@ -118,11 +118,11 @@ class CryptoEngine(BaseEngine):
         between long/short legs on perp swaps.
         """
         rate = self.taker_rate if self.perpetual_strict or is_open else self.maker_rate
-        return size * price * rate
+        return size * price * rate * self.cost_scale
 
     def apply_slippage(self, price: float, direction: int) -> float:
         """Slippage: unfavourable direction."""
-        return price * (1 + direction * self.slippage_rate)
+        return price * (1 + direction * self.slippage_rate * self.cost_scale)
 
     def execution_open(self, bar: pd.Series) -> float:
         if not self.perpetual_strict:

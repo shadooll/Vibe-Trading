@@ -119,7 +119,7 @@ class ForexEngine(BaseEngine):
             spread_pips = _SPREAD_PIPS.get(pair, _DEFAULT_SPREAD_PIPS)
 
         total_pips = (spread_pips / 2) + self.slippage_pips
-        return price + direction * total_pips * pip
+        return price + direction * total_pips * pip * self.cost_scale
 
     def on_bar(self, symbol: str, bar: pd.Series, timestamp: pd.Timestamp) -> None:
         """Apply daily swap/rollover at end of trading day."""

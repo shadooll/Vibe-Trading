@@ -115,11 +115,11 @@ class IndiaEquityEngine(BaseEngine):
             comm += notional * self.in_stamp_duty             # stamp duty: buy-only
         else:
             comm += self.in_dp_charge                         # DP charge: sell-only, flat
-        return comm
+        return comm * self.cost_scale
 
     def apply_slippage(self, price: float, direction: int) -> float:
         """India slippage (configurable)."""
-        return price * (1 + direction * self.slippage_rate)
+        return price * (1 + direction * self.slippage_rate * self.cost_scale)
 
 
 # ── Helpers ──

@@ -85,11 +85,11 @@ class ChinaAEngine(BaseEngine):
         # Stamp tax: 万5 sell-only
         if not is_open:
             comm += notional * self.stamp_tax
-        return comm
+        return comm * self.cost_scale
 
     def apply_slippage(self, price: float, direction: int) -> float:
         """A-share slippage (relatively small due to tick size)."""
-        return price * (1 + direction * self.slippage_rate)
+        return price * (1 + direction * self.slippage_rate * self.cost_scale)
 
 
 # ── Helpers ──

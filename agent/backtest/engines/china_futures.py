@@ -198,8 +198,8 @@ class ChinaFuturesEngine(FuturesBaseEngine):
         asymmetry (some products charge different rates for close-today).
         """
         if self._commission_override is not None:
-            return size * price * self._commission_override
-        return self.calc_commission_for_symbol(self._active_symbol, size, price, is_open)
+            return size * price * self._commission_override * self.cost_scale
+        return self.calc_commission_for_symbol(self._active_symbol, size, price, is_open) * self.cost_scale
 
     def calc_commission_for_symbol(
         self, symbol: str, size: float, price: float, is_open: bool,
@@ -224,7 +224,7 @@ class ChinaFuturesEngine(FuturesBaseEngine):
 
     def apply_slippage(self, price: float, direction: int) -> float:
         """Futures slippage."""
-        return price * (1 + direction * self.slippage_rate)
+        return price * (1 + direction * self.slippage_rate * self.cost_scale)
 
     def get_contract_multiplier(self, symbol: str) -> float:
         """Look up contract multiplier from product code."""

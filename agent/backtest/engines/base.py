@@ -405,6 +405,11 @@ class BaseEngine(ABC):
         #: Futures engines put ``pre_settle`` first: exchanges set the band off
         #: the previous settlement, not the previous close.
         self.base_price_fields: tuple[str, ...] = ("pre_close",)
+        #: Cost-sensitivity multiplier (spec §6). Scales commission + slippage
+        #: ONLY (leverage/funding are not costs); default 1.0 leaves the main
+        #: run untouched. Read from config["_cost_scale"], injected by the
+        #: sensitivity harness when it spawns a fresh engine per multiplier.
+        self.cost_scale: float = float(config.get("_cost_scale", 1.0))
         self.capital: float = self.initial_capital
         self.positions: Dict[str, Position] = {}
         self.trades: List[TradeRecord] = []
@@ -852,6 +857,19 @@ class BaseEngine(ABC):
             # also creates the artifacts dir, which step 8 otherwise creates.
             write_validation_json(run_dir / "artifacts" / "validation.json", v_results)
 
+        # 7b. Cost sensitivity (spec §6). Runs AFTER metrics, BEFORE artifacts/
+        # run_card, and spawns a FRESH engine instance per multiplier — so the
+        # main run's trades/equity_snapshots/artifacts/ledger are never touched
+        # (review H4: in-place rerun would leave trades.csv describing the last
+        # multiplier's run and silently skip crypto funding replays). Non-
+        # authoritative: a sensitivity reference, not a second verdict.
+        cost_sens = self._run_cost_sensitivity(
+            config, data_map, dates, close_df, target_pos, ret_df, valid_codes,
+            bench_ret, bars_per_year,
+        )
+        if cost_sens is not None:
+            m["cost_sensitivity"] = cost_sens
+
         # 8. Artifacts
         self._write_artifacts(
             run_dir, data_map, dates, equity_series, bench_equity, bench_ret,
@@ -963,6 +981,85 @@ class BaseEngine(ABC):
             logger.error("trial ledger append failed: %s", exc)
             return str(exc)
         return None
+
+    def _fresh_instance(self, config: Dict[str, Any], codes: List[str]) -> "BaseEngine":
+        """Construct a clean engine of the same class for a sensitivity rerun.
+
+        CompositeEngine takes an extra ``codes`` arg; everything else is
+        ``Engine(config)``. A fresh instance is what makes m=1.0 bit-identical
+        to the main run and guarantees no funding/liquidation/swap dedup cache
+        carries over (review H4).
+        """
+        cls = type(self)
+        try:
+            return cls(config)
+        except TypeError:
+            return cls(config, codes)  # CompositeEngine
+
+    def _run_cost_sensitivity(
+        self,
+        config: Dict[str, Any],
+        data_map: Dict[str, pd.DataFrame],
+        dates: pd.DatetimeIndex,
+        close_df: pd.DataFrame,
+        target_pos: pd.DataFrame,
+        ret_df: pd.DataFrame,
+        valid_codes: List[str],
+        bench_ret: pd.Series,
+        bars_per_year: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Re-execute the bar loop at scaled commission+slippage multipliers.
+
+        Returns None (zero overhead) when ``cost_sensitivity`` is absent from
+        config. Each multiplier runs on a FRESH engine instance whose
+        ``_cost_scale`` scales only commission + slippage (leverage/funding are
+        not costs). The main run's state is never touched.
+        """
+        cs_cfg = config.get("cost_sensitivity")
+        if not isinstance(cs_cfg, dict):
+            return None
+        multipliers = cs_cfg.get("multipliers")
+        if not isinstance(multipliers, (list, tuple)) or not multipliers:
+            return None
+
+        from backtest.metrics import calc_metrics
+
+        out: Dict[str, Any] = {"authoritative": False}
+        for mult in multipliers:
+            try:
+                m_float = float(mult)
+            except (TypeError, ValueError):
+                continue
+            fresh_config = dict(config)
+            fresh_config["_cost_scale"] = m_float
+            # The engine-construction config and the run_backtest config can be
+            # two different dicts (tests build the engine with initial_cash but
+            # pass a leaner config to run_backtest). Carry the LIVE instance's
+            # capital/leverage/cost-scale basis into the fresh engine so m=1.0
+            # is bit-identical to the main run regardless of which dict held it.
+            fresh_config.setdefault("initial_cash", self.initial_capital)
+            fresh_config.setdefault("leverage", self.default_leverage)
+            # Fresh instance → all subclass mutable state (crypto funding dedup,
+            # composite swap dates, ...) starts clean.
+            engine = self._fresh_instance(fresh_config, list(valid_codes))
+            engine._execute_bars(dates, data_map, close_df, target_pos, valid_codes)
+            eq = pd.Series(
+                [s.equity for s in engine.equity_snapshots],
+                index=[s.timestamp for s in engine.equity_snapshots],
+            )
+            if len(eq) == 0:
+                continue
+            sub = calc_metrics(
+                eq, engine.trades, self.initial_capital, bars_per_year, bench_ret, target_pos,
+            )
+            out[str(mult)] = {
+                "total_return": sub["total_return"],
+                "sharpe": sub["sharpe"],
+                "max_drawdown": sub["max_drawdown"],
+                "n_trades": sub["trade_count"],
+                "total_commission": round(sum(t.commission for t in engine.trades), 4),
+            }
+        return out if len(out) > 1 else None
 
     # ── Execution loop ──
 

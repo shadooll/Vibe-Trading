@@ -71,11 +71,11 @@ class GlobalEquityEngine(BaseEngine):
             comm += notional * self.hk_stamp_tax       # stamp tax bilateral
             comm += notional * self.hk_levy            # SFC + FRC levies
             comm += notional * self.hk_settlement      # CCASS settlement
-            return comm
+            return comm * self.cost_scale
         # US: zero commission (SEC fee negligible)
         return 0.0
 
     def apply_slippage(self, price: float, direction: int) -> float:
         """US: low slippage. HK: moderate slippage."""
         rate = self.slippage_hk if self.market == "hk" else self.slippage_us
-        return price * (1 + direction * rate)
+        return price * (1 + direction * rate * self.cost_scale)

@@ -293,7 +293,7 @@ class KoreaEquityEngine(BaseEngine):
         is_sell = (direction < 0) if is_open else (direction > 0)
         if is_sell:
             comm += notional * self.kr_tax_sell
-        return comm
+        return comm * self.cost_scale
 
     def apply_slippage(self, price: float, direction: int) -> float:
         """Korea slippage (configurable), quantized onto the KRX tick grid.
@@ -310,7 +310,7 @@ class KoreaEquityEngine(BaseEngine):
         Returns:
             A valid KRX price, never below one tick.
         """
-        slipped = price * (1 + direction * self.slippage_rate)
+        slipped = price * (1 + direction * self.slippage_rate * self.cost_scale)
         if direction > 0:
             return krx_round_up(slipped)
         return max(krx_round_down(slipped), krx_tick_size(slipped))
