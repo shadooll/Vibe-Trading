@@ -375,6 +375,12 @@ class PathConfig(_EnvBase):
     vibe_trading_strategy_store_db_path: str = Field(
         alias="VIBE_TRADING_STRATEGY_STORE_DB_PATH", default="",
     )
+    # Groups one search's backtest trials in the backtest_trials.jsonl ledger so
+    # Deflated-Sharpe can count "how many variants were tried". Set by the
+    # agent-facing backtest tool (server session id), NEVER written into
+    # config.json (run_card's config_hash is a file hash of config.json — a
+    # search-varying value there would corrupt the reproducibility anchor).
+    vibe_trading_search_id: str = Field(alias="VIBE_TRADING_SEARCH_ID", default="")
 
 
 # ---------------------------------------------------------------------------

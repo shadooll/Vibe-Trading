@@ -463,6 +463,7 @@ class Runner:
         *,
         cwd: Path | None = None,
         cli_args: list[str] | None = None,
+        extra_env: dict[str, str] | None = None,
     ) -> RunResult:
         """Run entry script and collect logs and artifacts.
 
@@ -471,6 +472,10 @@ class Runner:
             run_dir: Current run directory.
             cwd: Working directory for subprocess (default: entry_script.parent).
             cli_args: Additional CLI arguments appended to subprocess command.
+            extra_env: Extra environment variables layered on top of the
+                allowlisted runtime env (e.g. VIBE_TRADING_SEARCH_ID,
+                VIBE_TRADING_HOME for the trial ledger). Applied BEFORE the
+                sandbox-HOME override, so HOME/USERPROFILE keys here are ignored.
 
         Returns:
             RunResult object with process output and discovered artifacts.
@@ -487,6 +492,11 @@ class Runner:
         effective_cwd = cwd or entry_script.parent
         pythonpath_extra = cwd if cwd else None
         env = self._build_runtime_env(run_dir, pythonpath_extra=pythonpath_extra)
+        if extra_env:
+            for key, value in extra_env.items():
+                if key in ("HOME", "USERPROFILE"):
+                    continue  # sandbox-HOME override below owns these
+                env[key] = value
         python_cmd = self._pick_python_interpreter()
         console.print(f"[dim]Runner: using Python: {python_cmd}[/dim]")
 

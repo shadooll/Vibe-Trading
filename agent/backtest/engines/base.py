@@ -867,11 +867,100 @@ class BaseEngine(ABC):
             warnings=config.get("content_filter_warnings") or None,
         )
 
+        # 10. Trial ledger (search accounting for Deflated Sharpe). Only the
+        # agent path writes: a run without a search marker (CLI, legacy, tests)
+        # is not part of an optimizer's search and must not pollute the real
+        # ledger. Fail-closed on that path — a silent append failure would let
+        # DSR compute significance on a partial trial set.
+        ledger_error = self._append_trial_ledger(config, run_dir, equity_series, m)
+        if ledger_error is not None:
+            m["ledger_write_failed"] = True
+            if ledger_error != "skipped":  # real failure, not the no-search-id skip
+                from backtest.run_card import write_run_card as _rewrite_card
+                _rewrite_card(
+                    run_dir,
+                    config,
+                    m,
+                    data_sources=_run_card_data_sources(config, loader),
+                    strategy_path=run_dir / "code" / "signal_engine.py",
+                    warnings=config.get("content_filter_warnings") or None,
+                )
+
         # Print scalar metrics (skip nested dicts for JSON compat).
         # Explosive annual_return may be +inf; match options/run_card and emit
         # null instead of a bare Infinity token (invalid RFC-8259 JSON).
         print(json.dumps(_json_safe_scalar_metrics(m), indent=2, allow_nan=False))
         return m
+
+    def _append_trial_ledger(
+        self,
+        config: Dict[str, Any],
+        run_dir: Path,
+        equity_series: pd.Series,
+        metrics: Dict[str, Any],
+    ) -> Optional[str]:
+        """Append one trial row to the search ledger.
+
+        Returns None on success, "skipped" when the run is not part of a search
+        (no search_id — nothing to record), or the error message on a real
+        write failure (fail-closed: caller marks ``ledger_write_failed``).
+        """
+        from datetime import datetime, timezone
+
+        try:
+            from src.config.accessor import get_env_config
+            raw_search = get_env_config().paths.vibe_trading_search_id
+        except Exception:
+            raw_search = ""
+
+        from backtest.trials import (
+            append_trial,
+            config_hash,
+            sanitize_search_id,
+        )
+
+        strategy_file = run_dir / "code" / "signal_engine.py"
+        from backtest.run_card import _file_hash
+        strategy_hash = (
+            _file_hash(strategy_file) if strategy_file.exists() else ""
+        )
+        # Only the agent path (server-set VIBE_TRADING_SEARCH_ID) records a
+        # trial. A CLI/legacy/test run has no search marker; writing it would
+        # pollute the real ledger (and the developer's real ~/.vibe-trading).
+        # Sanitize to drop a forged/absent id so trials never group on an
+        # attacker-chosen key.
+        search_id = sanitize_search_id(raw_search)
+        if search_id is None:
+            return "skipped"
+
+        exit_counts: Dict[str, int] = {}
+        for t in self.trades:
+            exit_counts[t.exit_reason] = exit_counts.get(t.exit_reason, 0) + 1
+
+        record = {
+            "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "search_id": search_id,
+            "strategy_hash": strategy_hash,
+            "config_hash": config_hash(config, run_dir / "config.json"),
+            "run_dir": str(run_dir),
+            "interval": config.get("interval", "1D"),
+            "start_date": config.get("start_date", ""),
+            "end_date": config.get("end_date", ""),
+            "train_end": config.get("train_end"),
+            "valid_end": config.get("valid_end"),
+            "sharpe": metrics.get("sharpe"),
+            "valid_sharpe": (metrics.get("segments") or {}).get("valid", {}).get("sharpe")
+            if isinstance(metrics.get("segments"), dict)
+            else None,
+            "n_trades": metrics.get("trade_count", len(self.trades)),
+            "exit_reason_counts": exit_counts,
+        }
+        try:
+            append_trial(record)
+        except Exception as exc:  # fail-closed
+            logger.error("trial ledger append failed: %s", exc)
+            return str(exc)
+        return None
 
     # ── Execution loop ──
 

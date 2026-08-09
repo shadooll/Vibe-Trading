@@ -55,11 +55,31 @@ def run_backtest(run_dir: str) -> str:
         message=f"running backtest engine (source={source})",
     )
     runner = Runner(timeout=300)
+
+    # Trial-ledger search accounting: give the subprocess a server-side search
+    # id (never config.json — run_card's config_hash is a file hash of it) and
+    # the REAL runtime root so the ledger lands in ~/.vibe-trading, not the
+    # ephemeral sandbox HOME the Runner builds. The search id is the server
+    # session id (VIBE_GOAL_SESSION_ID) when present; the subprocess revalidates
+    # the charset and fails closed if the ledger write fails.
+    from src.config.accessor import get_env_config
+    from src.config.paths import get_runtime_root
+    _cfg = get_env_config()
+    extra_env: dict[str, str] = {"VIBE_TRADING_HOME": str(get_runtime_root())}
+    _session = getattr(getattr(_cfg, "paths", None), "vibe_goal_session_id", "") or ""
+    from backtest.trials import sanitize_search_id
+    _search = sanitize_search_id(_session) or sanitize_search_id(
+        getattr(getattr(_cfg, "paths", None), "vibe_trading_search_id", "")
+    )
+    if _search:
+        extra_env["VIBE_TRADING_SEARCH_ID"] = _search
+
     result = runner.execute(
         entry_script,
         run_path,
         cwd=agent_root,
         cli_args=[str(run_path)],
+        extra_env=extra_env,
     )
 
     emit_progress("finalize", message="collecting artifacts")
