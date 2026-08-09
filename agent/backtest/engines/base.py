@@ -41,6 +41,7 @@ from backtest.metrics import (
     calc_metrics,
     calc_trade_turnover_series,
 )
+from backtest.models import EquitySnapshot, Position, TradeRecord
 
 
 def _json_safe_scalar_metrics(metrics: Dict[str, Any]) -> Dict[str, Any]:
@@ -50,7 +51,6 @@ def _json_safe_scalar_metrics(metrics: Dict[str, Any]) -> Dict[str, Any]:
         for k, v in metrics.items()
         if not isinstance(v, dict)
     }
-from backtest.models import EquitySnapshot, Position, TradeRecord
 
 logger = logging.getLogger(__name__)
 
