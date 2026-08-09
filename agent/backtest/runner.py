@@ -82,6 +82,10 @@ class BacktestConfigSchema(BaseModel):
     initial_cash: float = Field(default=1_000_000, gt=0, allow_inf_nan=False)
     fundamental_fields: Optional[Dict[str, List[str]]] = None
     event_feeds: Optional[List[Dict[str, Any]]] = None
+    # Three-way split boundaries (spec §4). Both optional; when present,
+    # train = [start, train_end), valid = [train_end, valid_end), test = [valid_end, end].
+    train_end: Optional[str] = None
+    valid_end: Optional[str] = None
 
     @field_validator("codes")
     @classmethod
@@ -152,12 +156,48 @@ class BacktestConfigSchema(BaseModel):
                     raise ValueError(f"event_feeds entry missing required field: {key}")
         return v
 
+    @field_validator("train_end", "valid_end")
+    @classmethod
+    def valid_split_date(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        try:
+            pd.Timestamp(v)
+        except Exception:
+            raise ValueError(f"invalid split date format: {v!r} (expected YYYY-MM-DD)")
+        return v
+
     @model_validator(mode="after")
     def start_before_end(self) -> "BacktestConfigSchema":
         if pd.Timestamp(self.start_date) > pd.Timestamp(self.end_date):
             raise ValueError(
                 f"start_date ({self.start_date}) must be <= end_date ({self.end_date})"
             )
+        return self
+
+    @model_validator(mode="after")
+    def split_boundaries_ordered(self) -> "BacktestConfigSchema":
+        """Enforce start < train_end < valid_end < end (spec §4.1).
+
+        ``extra="allow"`` only lets new keys pass through; it does NOT order them,
+        so the check is explicit. A valid_end == end_date is allowed (empty test
+        segment) — the engine marks it validation_insufficient="test" rather than
+        rejecting. Requiring both-or-neither keeps the three-way split meaningful.
+        """
+        te = pd.Timestamp(self.train_end) if self.train_end else None
+        ve = pd.Timestamp(self.valid_end) if self.valid_end else None
+        if (te is None) != (ve is None):
+            raise ValueError("train_end and valid_end must be set together (or neither)")
+        if te is None:
+            return self
+        start = pd.Timestamp(self.start_date)
+        end = pd.Timestamp(self.end_date)
+        if not (start < te):
+            raise ValueError(f"train_end ({self.train_end}) must be > start_date ({self.start_date})")
+        if not (te < ve):
+            raise ValueError(f"valid_end ({self.valid_end}) must be > train_end ({self.train_end})")
+        if not (ve <= end):
+            raise ValueError(f"valid_end ({self.valid_end}) must be <= end_date ({self.end_date})")
         return self
 
 

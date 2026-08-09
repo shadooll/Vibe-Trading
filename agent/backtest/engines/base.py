@@ -788,6 +788,8 @@ class BaseEngine(ABC):
             bench_ret,
             target_pos,
             turnover_series=realized_turnover,
+            train_end=config.get("train_end"),
+            valid_end=config.get("valid_end"),
         )
         m.update(benchmark_metadata)
         m["by_symbol"] = by_symbol_stats(self.trades)

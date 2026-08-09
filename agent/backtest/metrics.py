@@ -430,6 +430,154 @@ def calc_trade_turnover_series(
     return (traded_margin / denominator).replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
 
+# ─── Three-way split segment metrics (spec §4) ───
+
+# Trade-count floors (EP004 EP004ValidLoss semantics): too few trades is
+# statistical noise, scored as bad rather than passed.
+MIN_TOTAL_TRADES = 30
+MIN_VALID_TRADES = 50
+
+
+def _segment_sharpe(seg_returns: pd.Series, bpy: int) -> float:
+    """Sharpe for one segment's per-bar returns, same annualisation as the run."""
+    if len(seg_returns) < 2:
+        return 0.0
+    arr = seg_returns.to_numpy(dtype=float, copy=False)
+    if not np.isfinite(arr).all():
+        return 0.0
+    vol = float(seg_returns.std())
+    sharpe = float(seg_returns.mean() / (vol + 1e-10) * np.sqrt(bpy))
+    return sharpe if np.isfinite(sharpe) else 0.0
+
+
+def _segment_max_dd(seg_equity: pd.Series) -> float:
+    if len(seg_equity) == 0:
+        return 0.0
+    peak = seg_equity.cummax()
+    dd = (seg_equity - peak) / peak.replace(0, 1)
+    return float(dd.min())
+
+
+def _segment_bpy(
+    seg_index: pd.DatetimeIndex,
+    bars_per_year: Optional[int],
+) -> int:
+    """Annualisation factor for one segment (review M12).
+
+    Mirrors calc_metrics: when bars_per_year is None (cross-market), derive the
+    segment's own calendar-day factor from its first/last dates rather than
+    assuming 252.
+    """
+    if bars_per_year is not None:
+        return bars_per_year
+    n = len(seg_index)
+    if n < 2:
+        return 252
+    diff = seg_index[-1] - seg_index[0]
+    calendar_days = diff.days if hasattr(diff, "days") else 0
+    years = calendar_days / 365.25 if calendar_days > 0 else 1.0
+    return int(n / years) if years > 0 else 252
+
+
+def calc_segment_metrics(
+    equity_curve: pd.Series,
+    trades: List[TradeRecord],
+    train_end: Any,
+    valid_end: Any,
+    bars_per_year: Optional[int] = 252,
+) -> Dict[str, Any]:
+    """Split equity into train/valid/test segments and score each.
+
+    Segment boundaries: train = [start, train_end), valid = [train_end,
+    valid_end), test = [valid_end, end]. A trade belongs to the segment its
+    EXIT falls in (review M7): a cross-segment position's realised PnL lands in
+    the closing segment's equity, so its n_trades is counted there too, keeping
+    n_trades aligned with segment equity.
+
+    NOTE (calibration difference vs EP004): per-segment Sharpe here uses the
+    engine's per-bar returns, no natural-day zero-filling, and the run's own
+    annualisation (possibly calendar-day for cross-market). EP004 slices on
+    close_date, zero-fills natural days, and uses √365. unified_score is
+    internally self-consistent but NOT directly comparable to EP004 fixtures.
+
+    Returns:
+        {"train": {...}, "valid": {...}, "test": {...}} with sharpe,
+        total_return, max_drawdown, n_trades per segment; empty segments have
+        n_trades=0 and null metrics.
+    """
+    te = pd.Timestamp(train_end)
+    ve = pd.Timestamp(valid_end)
+    idx = equity_curve.index
+    port_ret = equity_curve.pct_change().fillna(0.0)
+
+    def _slice(mask) -> Dict[str, Any]:
+        seg_eq = equity_curve[mask]
+        seg_ret = port_ret[mask]
+        n = len(seg_eq)
+        if n == 0:
+            return {"sharpe": None, "total_return": None, "max_drawdown": None, "n_trades": 0}
+        bpy = _segment_bpy(seg_eq.index, bars_per_year)
+        # Segment total return is relative to the segment's OWN start (path-
+        # consistent: it answers "what did this window return"), not the run's
+        # initial cash.
+        total_ret = float(seg_eq.iloc[-1] / seg_eq.iloc[0] - 1) if seg_eq.iloc[0] > 0 else 0.0
+        # n_trades by EXIT segment (cross-segment realised PnL lands here too).
+        seg_start, seg_stop = seg_eq.index[0], seg_eq.index[-1]
+        n_trades = sum(1 for t in trades if seg_start <= t.exit_time <= seg_stop)
+        return {
+            "sharpe": _segment_sharpe(seg_ret, bpy),
+            "total_return": total_ret,
+            "max_drawdown": _segment_max_dd(seg_eq),
+            "n_trades": n_trades,
+        }
+
+    return {
+        "train": _slice(idx < te),
+        "valid": _slice((idx >= te) & (idx < ve)),
+        "test": _slice(idx >= ve),
+    }
+
+
+def calc_unified_score(segments: Dict[str, Any]) -> Optional[float]:
+    """EP004ValidLoss negated (higher is better): valid − 0.5·max(0, train − valid).
+
+    The gap penalty punishes a strategy that fits train far better than valid —
+    the overfitting signature. Returns None when either segment Sharpe is
+    unavailable (no split, empty segment, or an insufficient-trade floor hit).
+    """
+    train = segments.get("train") or {}
+    valid = segments.get("valid") or {}
+    train_sharpe = train.get("sharpe")
+    valid_sharpe = valid.get("sharpe")
+    if train_sharpe is None or valid_sharpe is None:
+        return None
+    return float(valid_sharpe - 0.5 * max(0.0, train_sharpe - valid_sharpe))
+
+
+def validation_floor(
+    segments: Optional[Dict[str, Any]],
+    total_n_trades: int,
+) -> Optional[str]:
+    """Trade-count floor (spec §4.2). Returns the failing segment or None.
+
+    - valid segment present but n_trades < MIN_VALID_TRADES → "valid"
+    - overall n_trades < MIN_TOTAL_TRADES → "overall"
+    Checked valid-first so the more specific floor wins.
+    """
+    if segments:
+        valid = segments.get("valid") or {}
+        valid_n = valid.get("n_trades", 0)
+        if valid.get("sharpe") is not None and valid_n < MIN_VALID_TRADES:
+            return "valid"
+        # Empty test segment (valid_end == end_date) → mark "test".
+        test = segments.get("test") or {}
+        if test.get("sharpe") is None and test.get("n_trades", 0) == 0:
+            return "test"
+    if total_n_trades < MIN_TOTAL_TRADES:
+        return "overall"
+    return None
+
+
 def calc_metrics(
     equity_curve: pd.Series,
     trades: List[TradeRecord],
@@ -438,6 +586,8 @@ def calc_metrics(
     bench_ret: Optional[pd.Series] = None,
     positions: Optional[pd.DataFrame] = None,
     turnover_series: Optional[pd.Series] = None,
+    train_end: Any = None,
+    valid_end: Any = None,
 ) -> Dict[str, Any]:
     """Full set of performance metrics.
 
@@ -452,6 +602,9 @@ def calc_metrics(
             turnover fallback when ``turnover_series`` is not supplied.
         turnover_series: Actual per-bar execution turnover (optional). When
             supplied, it takes precedence over position-implied turnover.
+        train_end: Optional three-way split boundary (spec §4). With
+            ``valid_end``, adds ``segments`` + ``unified_score``.
+        valid_end: Optional three-way split boundary.
 
     Returns:
         Metrics dictionary (compatible with daily_portfolio format).
@@ -570,7 +723,7 @@ def calc_metrics(
             if not np.isfinite(bench_beta):
                 bench_beta = 0.0
 
-    return {
+    metrics: Dict[str, Any] = {
         "final_value": float(equity_curve.iloc[-1]),
         "total_return": total_ret,
         "annual_return": ann_ret,
@@ -592,6 +745,25 @@ def calc_metrics(
         "avg_turnover": round(avg_turnover, 6),
         "total_turnover": round(total_turnover, 6),
     }
+
+    # Three-way split segments + unified score + trade-count floor (spec §4).
+    # No split → byte-identical legacy behaviour (regression): none of these
+    # keys are added, and the trade floor is NOT applied (a legacy run with
+    # few trades must not suddenly flip to insufficient).
+    if train_end is not None and valid_end is not None:
+        segments = calc_segment_metrics(
+            equity_curve, trades, train_end, valid_end, bars_per_year,
+        )
+        metrics["segments"] = segments
+        metrics["unified_score"] = calc_unified_score(segments)
+        floor = validation_floor(segments, len(trades))
+        if floor is not None:
+            metrics["validation_insufficient"] = floor
+            # Too-few-trades valid → statistical noise; unified_score is void.
+            if floor == "valid":
+                metrics["unified_score"] = None
+
+    return metrics
 
 
 def _empty_metrics(initial_cash: float) -> Dict[str, Any]:
