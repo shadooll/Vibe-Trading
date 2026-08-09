@@ -7,7 +7,6 @@ import pandas as pd
 import pytest
 
 from backtest.metrics import calc_metrics
-from backtest.models import TradeRecord
 
 
 def _mk(port_ret, bench_ret):
