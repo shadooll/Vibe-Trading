@@ -578,6 +578,73 @@ def validation_floor(
     return None
 
 
+def _calc_attribution(
+    port_ret: pd.Series,
+    bench_ret: pd.Series,
+    beta: float,
+    bpy: int,
+    positions: Optional[pd.DataFrame],
+) -> Dict[str, Any]:
+    """alpha/beta return attribution (spec §5.2).
+
+    The decomposition is an APPROXIMATION, not an identity (review M8):
+    ``total_return`` is a compounded product while ``beta_contribution =
+    β·bench_total`` is linear, so ``total_return ≠ alpha + beta`` in general —
+    the residual absorbs the α·β·bench interaction term and any non-linearity.
+    The honest arithmetic form is also reported (``alpha_arith = Σ(port − β·bench)``,
+    ``beta_arith = β·Σbench``); a negative-beta book in a strong bull benchmark
+    amplifies the residual, so R² and the residual share are reported too.
+
+    Args:
+        port_ret: Portfolio per-bar returns (fillna(0), aligned).
+        bench_ret: Benchmark per-bar returns (reindexed, fillna(0)).
+        beta: Regression beta (same basis as ``benchmark_beta``).
+        bpy: Annualisation factor.
+        positions: Target-weight frame for exposure means (optional).
+    """
+    bench_var = float(bench_ret.var()) if len(bench_ret) > 1 else 0.0
+    port_var = float(port_ret.var()) if len(port_ret) > 1 else 0.0
+
+    alpha_d = port_ret - beta * bench_ret
+    alpha_annual = float(alpha_d.mean()) * bpy
+    # Single-variable regression: R² = squared correlation.
+    r_squared = 0.0
+    if port_var > 0 and bench_var > 0:
+        r_squared = float(beta * beta * bench_var / port_var)
+
+    bench_total = float((1 + bench_ret).prod() - 1)
+    port_total = float((1 + port_ret).prod() - 1)
+    beta_contribution = beta * bench_total
+    alpha_contribution = port_total - beta_contribution
+    residual = port_total - (alpha_contribution + beta_contribution)
+
+    out: Dict[str, Any] = {
+        "beta": float(beta),
+        "alpha_annual": float(alpha_annual),
+        "r_squared": float(r_squared),
+        "beta_contribution": float(beta_contribution),
+        "alpha_contribution": float(alpha_contribution),
+        # Honest arithmetic decomposition + residual (approximation disclosed).
+        "alpha_arith": float(alpha_d.sum()),
+        "beta_arith": float(beta * bench_ret.sum()),
+        "residual": float(residual),
+        "residual_share": float(abs(residual) / abs(port_total)) if abs(port_total) > 1e-12 else 0.0,
+        "approximation": (
+            "alpha/beta split is linear; residual absorbs interaction + non-linearity"
+        ),
+    }
+
+    if positions is not None and len(positions) > 0:
+        w = positions.fillna(0.0)
+        net = w.sum(axis=1).abs()
+        gross = w.abs().sum(axis=1)
+        out["net_exposure"] = float(net.mean())
+        invested = gross > 0
+        out["net_exposure_invested"] = float(net[invested].mean()) if invested.any() else 0.0
+        out["gross_exposure"] = float(gross.mean())
+    return out
+
+
 def calc_metrics(
     equity_curve: pd.Series,
     trades: List[TradeRecord],
@@ -723,6 +790,11 @@ def calc_metrics(
             if not np.isfinite(bench_beta):
                 bench_beta = 0.0
 
+    # alpha/beta attribution (spec §5). None when no benchmark — never a crash.
+    attribution: Optional[Dict[str, Any]] = None
+    if bench_ret is not None and len(bench_ret) > 0 and returns_finite:
+        attribution = _calc_attribution(port_ret, aligned_bench, bench_beta, bpy, positions)
+
     metrics: Dict[str, Any] = {
         "final_value": float(equity_curve.iloc[-1]),
         "total_return": total_ret,
@@ -744,6 +816,7 @@ def calc_metrics(
         "benchmark_beta": round(float(bench_beta), 4),
         "avg_turnover": round(avg_turnover, 6),
         "total_turnover": round(total_turnover, 6),
+        "attribution": attribution,
     }
 
     # Three-way split segments + unified score + trade-count floor (spec §4).
