@@ -292,6 +292,16 @@ def _normalise_fundamental_fields(config: Dict[str, Any]) -> dict[str, list[str]
     return normalized
 
 
+def _enrichment_as_of(config: Dict[str, Any]) -> str:
+    """Point-in-time boundary for fundamental/event enrichment (spec §4.4).
+
+    With a three-way split, enrichment must not peek into the test segment:
+    its as-of boundary drops from ``end_date`` to ``valid_end``. Without a
+    split the legacy ``end_date`` behaviour is preserved.
+    """
+    return config.get("valid_end") or config.get("end_date", "")
+
+
 def _maybe_enrich_fundamentals(
     data_map: Dict[str, pd.DataFrame],
     config: Dict[str, Any],
@@ -307,7 +317,7 @@ def _maybe_enrich_fundamentals(
             data_map,
             provider,
             fields_by_table,
-            as_of=config.get("end_date", ""),
+            as_of=_enrichment_as_of(config),
             periods=config.get("fundamental_periods"),
         )
     except Exception as exc:
@@ -347,7 +357,7 @@ def _maybe_enrich_events(
         return enrich_price_frames_with_events(
             data_map,
             provider,
-            as_of=config.get("end_date", ""),
+            as_of=_enrichment_as_of(config),
             decay_lambda=float(config.get("event_decay_lambda", 0.1)),
             lookback=int(config.get("event_lookback", 30)),
         )
@@ -873,7 +883,7 @@ class BaseEngine(ABC):
         # 8. Artifacts
         self._write_artifacts(
             run_dir, data_map, dates, equity_series, bench_equity, bench_ret,
-            target_pos, m, valid_codes,
+            target_pos, m, valid_codes, valid_end=config.get("valid_end"),
         )
 
         # 9. Trust Layer run card
@@ -1527,6 +1537,8 @@ class BaseEngine(ABC):
         target_pos: pd.DataFrame,
         metrics: dict,
         codes: List[str],
+        *,
+        valid_end: "str | None" = None,
     ) -> None:
         """Write CSV artifacts compatible with daily_portfolio format."""
         out = run_dir / "artifacts"
@@ -1535,6 +1547,15 @@ class BaseEngine(ABC):
         # OHLCV per symbol
         for code, df in data_map.items():
             df.to_csv(out / f"ohlcv_{code}.csv")
+
+        # 2b data boundary (spec §4.4): on the agent path with a three-way
+        # split, the run_dir is the directory the agent can read mid-search, so
+        # trim the on-disk OHLCV to <= valid_end. The engine already consumed
+        # the full in-memory data_map (test-segment metrics are computed), and
+        # the RESULT artifacts (equity/trades/metrics) stay whole — only the
+        # raw market-data the agent could peek at is clipped. CLI/legacy runs
+        # (no search marker) keep the full OHLCV.
+        self._trim_ohlcv_beyond_valid_end(out, valid_end)
 
         # Equity curve
         port_ret = equity_series.pct_change().fillna(0.0)
@@ -1592,6 +1613,39 @@ class BaseEngine(ABC):
         # Metrics
         flat_metrics = {k: v for k, v in metrics.items() if not isinstance(v, dict)}
         pd.DataFrame([flat_metrics]).to_csv(out / "metrics.csv", index=False)
+
+    @staticmethod
+    def _is_search_marked() -> bool:
+        """Whether this run carries a server-supplied search id (agent path)."""
+        try:
+            from src.config.accessor import get_env_config
+            raw = get_env_config().paths.vibe_trading_search_id
+        except Exception:
+            return False
+        from backtest.trials import sanitize_search_id
+        return sanitize_search_id(raw) is not None
+
+    def _trim_ohlcv_beyond_valid_end(self, artifacts_dir: Path, valid_end: "str | None") -> None:
+        """Drop OHLCV rows past valid_end on the agent path (spec §4.4, 2b).
+
+        Logical isolation: the test segment is removed from the agent-readable
+        data pack. No-op without a split or on non-agent (CLI/legacy/test) runs.
+        Read-then-rewrite per file; a parse failure on one file leaves it
+        untouched rather than corrupting the artifact.
+        """
+        if not valid_end or not self._is_search_marked():
+            return
+        boundary = pd.Timestamp(valid_end)
+        for csv in artifacts_dir.glob("ohlcv_*.csv"):
+            try:
+                df = pd.read_csv(csv, index_col=0, parse_dates=True)
+            except Exception:
+                continue
+            if df.empty or not isinstance(df.index, pd.DatetimeIndex):
+                continue
+            trimmed = df[df.index <= boundary]
+            if len(trimmed) != len(df):
+                trimmed.to_csv(csv)
 
     # ── Helpers ──
 

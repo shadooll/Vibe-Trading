@@ -115,7 +115,7 @@ def test_json_and_markdown_files_are_written(tmp_path: Path) -> None:
     markdown = md_path.read_text(encoding="utf-8")
 
     assert loaded == card
-    assert loaded["schema_version"] == "0.1"
+    assert loaded["schema_version"] == "0.2"
     assert loaded["generated_at"].endswith("Z")
     assert loaded["metrics"] == {"max_drawdown": -0.08, "sharpe": 1.23}
     assert loaded["validation"] == {"consistency_rate": 0.8, "n_windows": 5}

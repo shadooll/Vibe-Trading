@@ -434,6 +434,8 @@ class CryptoEngine(BaseEngine):
         target_pos: pd.DataFrame,
         metrics: dict,
         codes: list[str],
+        *,
+        valid_end: "str | None" = None,
     ) -> None:
         summary = None
         if self.perpetual_strict:
@@ -465,6 +467,7 @@ class CryptoEngine(BaseEngine):
             target_pos,
             metrics,
             codes,
+            valid_end=valid_end,
         )
         if summary is not None:
             write_perpetual_evidence(run_dir, self._perpetual_events, summary)
