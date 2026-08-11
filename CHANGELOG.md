@@ -6,6 +6,29 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Backtest statistical-robustness / anti-overfitting stack (Phase 0–3)** — signal-level
+  causality check; trial ledger + Deflated Sharpe Ratio for search accounting; block-bootstrap
+  Monte Carlo; three-way split (train/valid/test) with `unified_score` and trade-count floor;
+  alpha/beta return attribution; cost-sensitivity harness; run_card schema 0.3 with
+  segments/attribution/cost_sensitivity/dsr blocks; Phase 2b logical as-of data boundary;
+  Phase 3a OOS test-segment physical isolation (`oos_holdout/`) + unblinding record;
+  RunDetail robustness panels (DSR / attribution / cost-sensitivity / block-bootstrap fan chart);
+  strategy skills now gate on out-of-sample metrics. Search accounting is activated on the
+  server/API path via host-session-id injection into the backtest tool.
+
+### Known Limitations
+- **Shell tools bypass the anti-overfitting controls (S-C1, deferred to a hardening pass).**
+  When `VIBE_TRADING_ENABLE_SHELL_TOOLS=1`, the shell tool runs `subprocess` in the server
+  process's real HOME with no path sandbox, so an agent process could in principle read the
+  `oos_holdout/` test segment or append forged rows to `backtest_trials.jsonl` (manipulating
+  the DSR trial count). The file-tool write path is already constrained (ledger/holdout are
+  outside `allowed_write_roots`); only the shell tool is exposed. Mitigation today: shell
+  tools are off by default — enabling them trades away the anti-overfitting guarantee. The
+  proper fix (path-constrain shell commands, and/or move the ledger + holdout behind an
+  ACL/owner-isolated location writable only by the trusted server process) is a separate
+  architecture task.
+
+### Added
 - **Memory Tier 2: Structural Organization** — four independently-gated modules for memory lifecycle enhancement:
   - H-MEM hierarchical directory routing (`VT_MEMORY_HIERARCHY`)
   - A-MEM semantic linking via BM25 (`VT_MEMORY_LINKS`)
