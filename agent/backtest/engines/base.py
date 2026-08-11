@@ -893,18 +893,32 @@ class BaseEngine(ABC):
         # ledger. Fail-closed on that path — a silent append failure would let
         # DSR compute significance on a partial trial set.
         ledger_error = self._append_trial_ledger(config, run_dir, equity_series, m)
+        ledger_ok = ledger_error is None
         if ledger_error is not None:
             m["ledger_write_failed"] = True
-            if ledger_error != "skipped":  # real failure, not the no-search-id skip
-                from backtest.run_card import write_run_card as _rewrite_card
-                _rewrite_card(
-                    run_dir,
-                    config,
-                    m,
-                    data_sources=_run_card_data_sources(config, loader),
-                    strategy_path=run_dir / "code" / "signal_engine.py",
-                    warnings=config.get("content_filter_warnings") or None,
-                )
+
+        # 11. Deflated Sharpe verdict (spec §2.3). Mounted only when the run is
+        # part of a search AND has a valid split (valid_sharpe exists) — using
+        # train Sharpe would be self-deception. DSR is retrospective: it scores
+        # this search's trials (including this one) against the luck baseline.
+        dsr_block = self._maybe_run_dsr(
+            config, equity_series, bars_per_year, ledger_ok,
+        )
+        if dsr_block is not None:
+            m["dsr"] = dsr_block
+
+        # Rewrite the run card once if anything landed after step 9 (ledger
+        # failure flag and/or the DSR block) so the card reflects them.
+        if (ledger_error is not None and ledger_error != "skipped") or dsr_block is not None:
+            from backtest.run_card import write_run_card as _rewrite_card
+            _rewrite_card(
+                run_dir,
+                config,
+                m,
+                data_sources=_run_card_data_sources(config, loader),
+                strategy_path=run_dir / "code" / "signal_engine.py",
+                warnings=config.get("content_filter_warnings") or None,
+            )
 
         # Print scalar metrics (skip nested dicts for JSON compat).
         # Explosive annual_return may be +inf; match options/run_card and emit
@@ -981,6 +995,39 @@ class BaseEngine(ABC):
             logger.error("trial ledger append failed: %s", exc)
             return str(exc)
         return None
+
+    def _maybe_run_dsr(
+        self,
+        config: Dict[str, Any],
+        equity_series: pd.Series,
+        bars_per_year: int,
+        ledger_ok: bool,
+    ) -> Optional[Dict[str, Any]]:
+        """Compute the Deflated-Sharpe verdict for this search, if applicable.
+
+        Requires a search marker (agent path) and a valid split — without
+        ``valid_end`` there is no out-of-sample Sharpe and DSR refuses to give
+        a formal verdict (using train Sharpe would be self-deception, spec §2.2).
+        Returns None (no block mounted) when not applicable.
+        """
+        if not config.get("valid_end"):
+            return None
+        try:
+            from src.config.accessor import get_env_config
+            raw_search = get_env_config().paths.vibe_trading_search_id
+        except Exception:
+            raw_search = ""
+        from backtest.trials import run_dsr, sanitize_search_id
+        search_id = sanitize_search_id(raw_search)
+        if search_id is None:
+            return None
+        try:
+            return run_dsr(
+                search_id, equity_series, bars_per_year, ledger_ok=ledger_ok,
+            )
+        except Exception as exc:  # DSR must never crash a run
+            logger.warning("DSR computation failed: %s", exc)
+            return None
 
     def _fresh_instance(self, config: Dict[str, Any], codes: List[str]) -> "BaseEngine":
         """Construct a clean engine of the same class for a sensitivity rerun.

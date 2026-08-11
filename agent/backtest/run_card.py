@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
-SCHEMA_VERSION = "0.1"
+SCHEMA_VERSION = "0.2"
 BACKTEST_SUMMARY_KEYS = (
     "codes",
     "start_date",
@@ -19,7 +19,14 @@ BACKTEST_SUMMARY_KEYS = (
     "engine",
     "initial_cash",
     "source",
+    "train_end",
+    "valid_end",
 )
+# Nested metric blocks carried into the run card (NOT scalar — they would be
+# silently dropped by _scalar_metrics). Mounted BEFORE _json_safe so NaN/Inf
+# inside them are sanitised to null rather than crashing json.dumps
+# (allow_nan=False). Mirrors the existing `validation` pattern (review H5).
+_NESTED_METRIC_KEYS = ("segments", "attribution", "cost_sensitivity", "dsr")
 
 
 def write_run_card(
@@ -75,6 +82,11 @@ def write_run_card(
         card["artifact_refs"] = normalized_refs
     if "validation" in metrics:
         card["validation"] = metrics["validation"]
+    # Nested robustness blocks (spec §7): mounted BEFORE _json_safe below so
+    # embedded NaN/Inf are sanitised to null instead of crashing json.dumps.
+    for key in _NESTED_METRIC_KEYS:
+        if key in metrics and metrics[key] is not None:
+            card[key] = metrics[key]
 
     card = _json_safe(card)
     json_path = run_dir / "run_card.json"
@@ -123,10 +135,11 @@ def _backtest_summary(config: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _scalar_metrics(metrics: Mapping[str, Any]) -> dict[str, Any]:
+    skip = {"validation", *_NESTED_METRIC_KEYS}
     return {
         key: value
         for key, value in metrics.items()
-        if key != "validation" and _is_scalar(value)
+        if key not in skip and _is_scalar(value)
     }
 
 
@@ -178,6 +191,20 @@ def _normalize_artifact_refs(artifact_refs: Sequence[Mapping[str, Any]] | None) 
     return refs
 
 
+def _md_escape(value: Any) -> str:
+    """Escape agent-controllable strings before markdown interpolation.
+
+    ``_render_markdown`` interpolates fields verbatim; a string carrying HTML
+    (``<img onerror=...>``) would render as an injection in a viewer. Neutralise
+    the HTML-active characters. Applied to codes, data_sources, and any string
+    nested in the robustness blocks (dsr.reason, approximation notes, ...).
+    """
+    text = str(value)
+    for ch, esc in (("&", "&amp;"), ("<", "&lt;"), (">", "&gt;"), ("|", "\\|")):
+        text = text.replace(ch, esc)
+    return text
+
+
 def _render_markdown(card: Mapping[str, Any]) -> str:
     lines = [
         "# Backtest Run Card",
@@ -190,7 +217,7 @@ def _render_markdown(card: Mapping[str, Any]) -> str:
 
     backtest = card.get("backtest", {})
     if backtest:
-        lines.extend(f"- {key}: {value}" for key, value in backtest.items())
+        lines.extend(f"- {key}: {_md_escape(value)}" for key, value in backtest.items())
     else:
         lines.append("- No backtest summary fields provided.")
 
@@ -202,11 +229,30 @@ def _render_markdown(card: Mapping[str, Any]) -> str:
 
     lines.extend(["", "## Data Sources"])
     data_sources = card.get("data_sources", [])
-    lines.extend(f"- {source}" for source in data_sources) if data_sources else lines.append("- None recorded.")
+    lines.extend(f"- {_md_escape(source)}" for source in data_sources) if data_sources else lines.append("- None recorded.")
 
     lines.extend(["", "## Metrics"])
     metric_values = card.get("metrics", {})
-    lines.extend(f"- {key}: {value}" for key, value in metric_values.items()) if metric_values else lines.append("- No scalar metrics recorded.")
+    lines.extend(f"- {key}: {_md_escape(value) if isinstance(value, str) else value}" for key, value in metric_values.items()) if metric_values else lines.append("- No scalar metrics recorded.")
+
+    # Nested robustness blocks (rendered compactly; the JSON card is canonical).
+    for key in _NESTED_METRIC_KEYS:
+        block = card.get(key)
+        if not isinstance(block, Mapping):
+            continue
+        lines.extend(["", f"## {key.replace('_', ' ').title()}"])
+        if key == "dsr":
+            for k, v in block.items():
+                lines.append(f"- {k}: {_md_escape(v) if isinstance(v, str) else v}")
+        else:
+            for seg, vals in block.items():
+                if isinstance(vals, Mapping):
+                    inner = ", ".join(
+                        f"{k}={_md_escape(v) if isinstance(v, str) else v}" for k, v in vals.items()
+                    )
+                    lines.append(f"- **{_md_escape(seg)}**: {inner}")
+                else:
+                    lines.append(f"- {_md_escape(seg)}: {_md_escape(vals) if isinstance(vals, str) else vals}")
 
     lines.extend(["", "## Validation"])
     if "validation" in card:

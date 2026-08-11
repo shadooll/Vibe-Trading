@@ -172,3 +172,48 @@ def read_trials_verbose(
                 continue
             rows.append(rec)
     return rows, corrupt
+
+
+def run_dsr(
+    search_id: str,
+    equity_series: Any,
+    bars_per_year: int,
+    root: Optional[Path] = None,
+    ledger_ok: bool = True,
+) -> Dict[str, Any]:
+    """Compute Deflated Sharpe for one search from its ledger group.
+
+    Reads this search's trial rows, takes each trial's ``valid_sharpe`` as the
+    score (out-of-sample — the only honest input; falls back to unavailable
+    rather than self-deceiving on train Sharpe), and uses the selected run's
+    own daily equity returns.
+
+    Args:
+        search_id: The search group to score.
+        equity_series: The SELECTED run's equity curve (daily returns derived).
+        bars_per_year: This run's annualisation factor (never hard 252).
+        root: Ledger root override (tests).
+        ledger_ok: False when the trial-ledger write failed — DSR on a partial
+            trial set is not authoritative (review H6).
+
+    Returns:
+        The ``deflated_sharpe_ratio`` dict; ``authoritative`` forced False when
+        ``ledger_ok`` is False.
+    """
+    from backtest.validation import deflated_sharpe_ratio
+
+    trials = read_trials(search_id=search_id, root=root)
+    scores = [t.get("valid_sharpe") for t in trials]
+    daily = equity_series.pct_change().dropna().values.tolist()
+    out = deflated_sharpe_ratio(
+        trial_scores=scores,
+        daily_returns=daily,
+        bars_per_year=bars_per_year,
+        mode="oos",
+    )
+    out["search_id"] = search_id
+    if not ledger_ok:
+        out["authoritative"] = False
+        out["reason"] = (out.get("reason") + "; " if out.get("reason") else "") + \
+            "ledger write failed: partial trial set"
+    return out
