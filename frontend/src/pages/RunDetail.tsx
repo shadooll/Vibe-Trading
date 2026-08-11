@@ -17,6 +17,7 @@ import {
   Fingerprint,
   List,
   Loader2,
+  Lock,
   PieChart,
   ShieldCheck,
   TrendingUp,
@@ -25,7 +26,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { api, type AttributionBlock, type BacktestMetrics, type CostSensitivityBlock, type DsrBlock, type RunCard, type RunData, type ValidationData } from "@/lib/api";
+import { api, type AttributionBlock, type BacktestMetrics, type CostSensitivityBlock, type DataIsolationBlock, type DsrBlock, type RunCard, type RunData, type ValidationData } from "@/lib/api";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import { CandlestickChart } from "@/components/charts/CandlestickChart";
@@ -450,11 +451,12 @@ function RunCardTab({ card }: { card: RunCard }) {
         </RunCardPanel>
       </div>
 
-      {(card.dsr || card.attribution || card.cost_sensitivity) && (
+      {(card.dsr || card.attribution || card.cost_sensitivity || card.data_isolation) && (
         <div className="grid gap-4 xl:grid-cols-3">
           {card.dsr && <DsrPanel dsr={card.dsr} />}
           {card.attribution && <AttributionPanel attribution={card.attribution} />}
           {card.cost_sensitivity && <CostSensitivityPanel cost={card.cost_sensitivity} />}
+          {card.data_isolation && <DataIsolationPanel isolation={card.data_isolation} />}
         </div>
       )}
 
@@ -581,6 +583,42 @@ function CostSensitivityPanel({ cost }: { cost: CostSensitivityBlock }) {
           })}
         </tbody>
       </table>
+    </RunCardPanel>
+  );
+}
+
+function DataIsolationPanel({ isolation }: { isolation: DataIsolationBlock }) {
+  const symbols = isolation.symbols || [];
+  return (
+    <RunCardPanel title={i18n.t("runDetail.dataIsolation")} icon={Lock}>
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <span className={cn("inline-block rounded-full px-2 py-0.5 text-xs font-semibold", isolation.enabled ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" : "bg-zinc-500/10 text-zinc-500")}>
+            {isolation.enabled ? i18n.t("runDetail.isolationEnabled") : i18n.t("runDetail.isolationDisabled")}
+          </span>
+        </div>
+        <table className="w-full text-sm">
+          <tbody>
+            <tr className="border-b last:border-0">
+              <td className="py-1.5 pr-3 text-muted-foreground">{i18n.t("runDetail.isolationBoundary")}</td>
+              <td className="py-1.5 text-right font-mono tabular-nums">{isolation.boundary || i18n.t("runDetail.notAvailable")}</td>
+            </tr>
+            <tr className="border-b last:border-0">
+              <td className="py-1.5 pr-3 text-muted-foreground">{i18n.t("runDetail.isolationHoldout")}</td>
+              <td className="py-1.5 text-right font-mono text-xs">{isolation.holdout_path || i18n.t("runDetail.notAvailable")}</td>
+            </tr>
+            <tr className="border-b last:border-0">
+              <td className="py-1.5 pr-3 text-muted-foreground">{i18n.t("runDetail.isolationSymbols")}</td>
+              <td className="py-1.5 text-right font-mono text-xs">{symbols.length ? symbols.join(", ") : i18n.t("runDetail.notAvailable")}</td>
+            </tr>
+            <tr className="border-b last:border-0">
+              <td className="py-1.5 pr-3 text-muted-foreground">{i18n.t("runDetail.isolationUnblindedAt")}</td>
+              <td className="py-1.5 text-right font-mono text-xs">{isolation.unblinded_at ? formatRunCardValue(isolation.unblinded_at) : i18n.t("runDetail.notAvailable")}</td>
+            </tr>
+          </tbody>
+        </table>
+        {isolation.unblind_reason && <p className="text-[10px] italic text-muted-foreground">{isolation.unblind_reason}</p>}
+      </div>
     </RunCardPanel>
   );
 }

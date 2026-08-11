@@ -635,6 +635,18 @@ export interface CostSensitivityBlock {
   [multiplier: string]: unknown;
 }
 
+/** Phase 3a OOS test-segment isolation / unblinding record (spec §8.1). Present
+ * only on the agent search path with a three-way split and rows past valid_end;
+ * absent entirely when isolation does not apply. */
+export interface DataIsolationBlock {
+  enabled?: boolean;
+  boundary?: string;
+  holdout_path?: string;
+  symbols?: string[];
+  unblinded_at?: string;
+  unblind_reason?: string;
+}
+
 export interface RunCard {
   schema_version?: string;
   generated_at?: string;
@@ -649,6 +661,7 @@ export interface RunCard {
   dsr?: DsrBlock;
   attribution?: AttributionBlock | null;
   cost_sensitivity?: CostSensitivityBlock;
+  data_isolation?: DataIsolationBlock;
   segments?: Record<string, unknown>;
   [key: string]: unknown;
 }

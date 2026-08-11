@@ -179,6 +179,7 @@ describe("RunDetail page", () => {
         dsr: { DSR: 0.97, verdict: "significant", n_trials: 12, authoritative: true },
         attribution: { beta: 0.85, alpha_annual: 0.042, r_squared: 0.61, residual_share: 0.03, approximation: "linear approx" },
         cost_sensitivity: { authoritative: false, "1.0": { sharpe: 1.2, total_return: 0.3 }, "2.0": { sharpe: 0.9, total_return: 0.22 } },
+        data_isolation: { enabled: true, boundary: "2024-06-30", holdout_path: "oos_holdout/run_robust", symbols: ["000001.SZ"], unblinded_at: "2024-08-01T00:00:00+00:00", unblind_reason: "engine requires the test segment in-memory to score segments.test" },
       } as NonNullable<RunData["run_card"]>,
     });
     apiMock.getRunCode.mockResolvedValue({});
@@ -203,6 +204,13 @@ describe("RunDetail page", () => {
     expect(screen.getByText("1.0")).toBeInTheDocument();
     expect(screen.getByText("2.0")).toBeInTheDocument();
     expect(screen.getByText("30.00%")).toBeInTheDocument();
+
+    // Data isolation block: enabled badge + boundary + holdout path + symbols.
+    expect(screen.getByText("Data Isolation")).toBeInTheDocument();
+    expect(screen.getByText("Isolated")).toBeInTheDocument();
+    expect(screen.getByText("2024-06-30")).toBeInTheDocument();
+    expect(screen.getByText("oos_holdout/run_robust")).toBeInTheDocument();
+    expect(screen.getByText("000001.SZ")).toBeInTheDocument();
   });
 
   it("omits the robustness blocks entirely when the run-card lacks them", async () => {
@@ -222,5 +230,6 @@ describe("RunDetail page", () => {
     expect(screen.queryByText("Deflated Sharpe Ratio")).not.toBeInTheDocument();
     expect(screen.queryByText("Alpha / Beta Attribution")).not.toBeInTheDocument();
     expect(screen.queryByText("Cost Sensitivity")).not.toBeInTheDocument();
+    expect(screen.queryByText("Data Isolation")).not.toBeInTheDocument();
   });
 });
