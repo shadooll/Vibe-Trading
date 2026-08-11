@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
-SCHEMA_VERSION = "0.2"
+SCHEMA_VERSION = "0.3"
 BACKTEST_SUMMARY_KEYS = (
     "codes",
     "start_date",
@@ -87,6 +87,11 @@ def write_run_card(
     for key in _NESTED_METRIC_KEYS:
         if key in metrics and metrics[key] is not None:
             card[key] = metrics[key]
+    # Phase 3a (spec §8.1): OOS test-segment isolation + unblinding record.
+    # Sourced from config (the runner sets _data_isolation), not metrics.
+    isolation = config.get("_data_isolation") if isinstance(config, Mapping) else None
+    if isolation:
+        card["data_isolation"] = isolation
 
     card = _json_safe(card)
     json_path = run_dir / "run_card.json"
@@ -253,6 +258,13 @@ def _render_markdown(card: Mapping[str, Any]) -> str:
                     lines.append(f"- **{_md_escape(seg)}**: {inner}")
                 else:
                     lines.append(f"- {_md_escape(seg)}: {_md_escape(vals) if isinstance(vals, str) else vals}")
+
+    # Phase 3a: OOS data-isolation / unblinding record (flat block of scalars).
+    isolation = card.get("data_isolation")
+    if isinstance(isolation, Mapping):
+        lines.extend(["", "## Data Isolation"])
+        for k, v in isolation.items():
+            lines.append(f"- {k}: {_md_escape(v) if isinstance(v, str) else v}")
 
     lines.extend(["", "## Validation"])
     if "validation" in card:

@@ -1023,6 +1023,15 @@ def main(run_dir: Path) -> None:
     # aligned with the data consumed by the engine.
     loader = _AutoLoader(data_map)
 
+    # Phase 3a (spec §8.1): on the agent search path with a three-way split,
+    # hold the test segment out of the agent-readable pack (persisted under the
+    # sandbox-invisible oos_holdout/). The engine keeps the full in-memory
+    # snapshot above; only the on-disk/agent-visible pack is isolated. The
+    # resulting data_isolation block is recorded on the run card.
+    isolation = _isolate_test_segment(data_map, config, run_dir)
+    if isolation is not None:
+        config["_data_isolation"] = isolation
+
     if engine_type == "options":
         from backtest.engines.options_portfolio import run_options_backtest
         run_options_backtest(config, loader, signal_engine, run_dir, bars_per_year=bars_per_year)
@@ -1339,6 +1348,73 @@ def _sanitize_data_map(data_map: dict) -> dict:
         The same mapping with each frame's invalid bars removed.
     """
     return {code: validate_ohlc(frame) for code, frame in data_map.items()}
+
+
+def _isolate_test_segment(data_map: dict, config: dict, run_dir: Path) -> Optional[Dict[str, Any]]:
+    """Phase 3a (spec §8.1): split the test segment off the agent-visible pack.
+
+    On the agent search path (valid search id) with a three-way split, persist
+    the per-symbol rows past ``valid_end`` to a holdout directory under the real
+    runtime root (``oos_holdout/<run_id>/``). That directory is NOT in the
+    sandbox re-expose whitelist (``_SANDBOX_HOME_REEXPOSE``), so the agent's
+    ephemeral-HOME view of ``~/.vibe-trading`` never contains it — the raw test
+    segment is physically absent from anything the agent can read, one level
+    deeper than 2b's after-the-fact ``ohlcv_*.csv`` trim.
+
+    The engine still needs the full series to score the test segment, so the
+    in-memory ``data_map`` fed to ``_AutoLoader`` is left untouched; only the
+    on-disk/agent-visible pack is isolated. Returns the ``data_isolation`` block
+    for the run card, or ``None`` when isolation does not apply (non-agent path,
+    no split, or nothing past the boundary).
+
+    Fail-closed: an unwritable holdout dir raises so the run aborts rather than
+    silently running un-isolated.
+    """
+    from backtest.trials import sanitize_search_id
+
+    valid_end = config.get("valid_end")
+    if not valid_end:
+        return None
+    try:
+        from src.config.accessor import get_env_config
+        search_id = sanitize_search_id(get_env_config().paths.vibe_trading_search_id)
+    except Exception:
+        search_id = None
+    if search_id is None:
+        return None
+
+    boundary = pd.Timestamp(valid_end)
+    test_parts: Dict[str, pd.DataFrame] = {}
+    for code, df in data_map.items():
+        if isinstance(df.index, pd.DatetimeIndex):
+            tail = df[df.index > boundary]
+            if not tail.empty:
+                test_parts[code] = tail
+    if not test_parts:
+        return None
+
+    from src.config.paths import get_runtime_root
+    run_id = run_dir.name
+    holdout = get_runtime_root() / "oos_holdout" / run_id
+    # Fail-closed: if we cannot persist the holdout, abort the run (no silent
+    # degradation to an un-isolated agent-visible pack).
+    holdout.mkdir(parents=True, exist_ok=True)
+    for code, tail in test_parts.items():
+        tail.to_csv(holdout / f"ohlcv_test_{code}.csv")
+
+    unblinded_at = pd.Timestamp.now(tz="UTC").isoformat()
+    logger.info(
+        "OOS isolation: %d symbol(s) test segment (>%s) held out to %s",
+        len(test_parts), valid_end, holdout,
+    )
+    return {
+        "enabled": True,
+        "boundary": str(valid_end),
+        "holdout_path": f"oos_holdout/{run_id}",
+        "symbols": sorted(test_parts),
+        "unblinded_at": unblinded_at,
+        "unblind_reason": "engine requires the test segment in-memory to score segments.test",
+    }
 
 
 class _AutoLoader:

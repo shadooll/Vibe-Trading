@@ -245,7 +245,7 @@ class TestSymbolIsolation:
         run_card_path = tmp_path / "run_card.json"
         assert run_card_path.exists()
         run_card = json.loads(run_card_path.read_text(encoding="utf-8"))
-        assert run_card["schema_version"] == "0.2"
+        assert run_card["schema_version"] == "0.3"
         assert run_card["backtest"]["codes"] == ["000001.SZ"]
         assert run_card["data_sources"] == ["tushare"]
         assert run_card["metrics"]["benchmark_return"] == 0.00495

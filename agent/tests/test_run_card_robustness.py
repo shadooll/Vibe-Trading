@@ -35,9 +35,9 @@ def test_nested_blocks_mounted(tmp_path):
     assert on_disk["segments"]["valid"]["sharpe"] == 1.0
 
 
-def test_schema_version_is_02(tmp_path):
+def test_schema_version_is_03(tmp_path):
     card = write_run_card(tmp_path, {"codes": ["AAA"]}, _base_metrics())
-    assert card["schema_version"] == "0.2"
+    assert card["schema_version"] == "0.3"
 
 
 def test_nan_inf_in_nested_blocks_serialised_as_null(tmp_path):
