@@ -147,6 +147,74 @@ def append_trial(record: Dict[str, Any], root: Optional[Path] = None) -> None:
             os.close(fd)
 
 
+def _sanctioned_valid_end_locked(path: Path, search_id: str) -> Optional[str]:
+    """Return the first recorded ``valid_end`` for a search (the authority).
+
+    Caller MUST hold ``_ledger_lock(path)`` — this reads the ledger without
+    taking the lock so it can run inside the compare-and-set critical section
+    of :func:`append_trial_with_sanction`. Returns None when no prior trial of
+    this search recorded a ``valid_end`` yet.
+    """
+    if not path.exists():
+        return None
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(rec, dict) or rec.get("search_id") != search_id:
+                continue
+            value = rec.get("valid_end")
+            if value is not None:
+                return value
+    return None
+
+
+def append_trial_with_sanction(record: Dict[str, Any], root: Optional[Path] = None) -> None:
+    """Append one trial row, locking the search's OOS boundary to its first trial.
+
+    ``valid_sharpe`` is comparable across a search's trials only when every
+    trial uses the SAME out-of-sample boundary — ``run_dsr`` pools each trial's
+    ``valid_sharpe`` into one DSR. An agent that edits ``valid_end`` mid-search
+    would otherwise pool differently-meaning Sharpes into one verdict (review
+    RT-3: "change the exam scope to the part you memorised").
+
+    The authority is the first ``valid_end`` this ``search_id`` ever recorded.
+    If this row's ``valid_end`` differs, the row is STILL written (honest
+    record — the trial happened) but flagged ``valid_end_mismatch: True`` and
+    stamped with ``sanctioned_valid_end`` so ``run_dsr`` can exclude it from the
+    pooled score.
+
+    The read-authority → compare → append sequence runs inside a single
+    ``_ledger_lock`` so two concurrent trials can't both conclude they are the
+    first (compare-and-set is atomic). Raises on write failure (fail-closed).
+    """
+    path = ledger_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    search_id = record.get("search_id")
+    with _ledger_lock(path):
+        if search_id is not None:
+            sanctioned = _sanctioned_valid_end_locked(path, search_id)
+            current = record.get("valid_end")
+            # Only compare when both sides have a boundary. A None-authority
+            # means this is the first trial with a valid_end; a None-current
+            # means no OOS segment (already excluded from DSR upstream).
+            if sanctioned is not None and current is not None and current != sanctioned:
+                record["valid_end_mismatch"] = True
+                record["sanctioned_valid_end"] = sanctioned
+        line = json.dumps(record, ensure_ascii=False, default=str) + "\n"
+        fd = os.open(str(path), os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
+        try:
+            os.write(fd, line.encode("utf-8"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
 def read_trials(
     search_id: Optional[str] = None,
     root: Optional[Path] = None,
@@ -220,7 +288,13 @@ def run_dsr(
     from backtest.validation import deflated_sharpe_ratio
 
     trials = read_trials(search_id=search_id, root=root)
-    scores = [t.get("valid_sharpe") for t in trials]
+    # Exclude trials whose OOS boundary drifted from the search's sanctioned
+    # first-trial boundary (append_trial_with_sanction flags them): their
+    # valid_sharpe measures a different out-of-sample window and would pollute
+    # the pooled score. Count the exclusions so the drift is visible, not silent.
+    pooled = [t for t in trials if not t.get("valid_end_mismatch")]
+    n_excluded = len(trials) - len(pooled)
+    scores = [t.get("valid_sharpe") for t in pooled]
     daily = equity_series.pct_change().dropna().values.tolist()
     out = deflated_sharpe_ratio(
         trial_scores=scores,
@@ -229,6 +303,8 @@ def run_dsr(
         mode="oos",
     )
     out["search_id"] = search_id
+    if n_excluded:
+        out["n_excluded_boundary_drift"] = n_excluded
     if not ledger_ok:
         out["authoritative"] = False
         out["reason"] = (out.get("reason") + "; " if out.get("reason") else "") + \

@@ -955,7 +955,7 @@ class BaseEngine(ABC):
         from datetime import datetime, timezone
 
         from backtest.trials import (
-            append_trial,
+            append_trial_with_sanction,
             config_hash,
             current_search_id,
         )
@@ -997,7 +997,7 @@ class BaseEngine(ABC):
             "exit_reason_counts": exit_counts,
         }
         try:
-            append_trial(record)
+            append_trial_with_sanction(record)
         except Exception as exc:  # fail-closed
             logger.error("trial ledger append failed: %s", exc)
             return str(exc)
