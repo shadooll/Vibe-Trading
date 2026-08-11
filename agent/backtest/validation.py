@@ -237,15 +237,23 @@ def block_bootstrap(
     }
 
     # Fan-chart payload: downsample along steps (<=400) and along paths (<=30).
+    # Schema mirrors monte_carlo_test.equity_paths exactly (initial_capital +
+    # five percentile bands + row-sampled paths) so the frontend can render both
+    # with the same MonteCarloPathsChart component without adaptation.
     col_idx = np.unique(np.linspace(0, N - 1, min(N, 400)).astype(int))
+    sample_rows = np.unique(
+        np.linspace(0, kept.shape[0] - 1, min(30, kept.shape[0])).astype(int)
+    )
     result["equity_paths"] = {
         "steps": (col_idx + 1).tolist(),
-        "start": round(float(start), 2),
+        "initial_capital": round(float(start), 2),
         "actual": np.round((start * np.cumprod(1.0 + rets))[col_idx], 2).tolist(),
         "band_p5": np.round(np.percentile(kept[:, col_idx], 5, axis=0), 2).tolist(),
+        "band_p25": np.round(np.percentile(kept[:, col_idx], 25, axis=0), 2).tolist(),
         "band_p50": np.round(np.percentile(kept[:, col_idx], 50, axis=0), 2).tolist(),
+        "band_p75": np.round(np.percentile(kept[:, col_idx], 75, axis=0), 2).tolist(),
         "band_p95": np.round(np.percentile(kept[:, col_idx], 95, axis=0), 2).tolist(),
-        "samples": np.round(kept[:, col_idx], 2).tolist(),
+        "samples": np.round(kept[np.ix_(sample_rows, col_idx)], 2).tolist(),
     }
     return result
 

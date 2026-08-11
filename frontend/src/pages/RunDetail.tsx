@@ -9,6 +9,7 @@ import {
   BarChart3,
   CheckCircle2,
   Code2,
+  Coins,
   Copy,
   Database,
   Download,
@@ -16,13 +17,15 @@ import {
   Fingerprint,
   List,
   Loader2,
+  PieChart,
   ShieldCheck,
+  TrendingUp,
   XCircle,
   CircleSlash,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { api, type BacktestMetrics, type RunCard, type RunData, type ValidationData } from "@/lib/api";
+import { api, type AttributionBlock, type BacktestMetrics, type CostSensitivityBlock, type DsrBlock, type RunCard, type RunData, type ValidationData } from "@/lib/api";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import { CandlestickChart } from "@/components/charts/CandlestickChart";
@@ -447,8 +450,15 @@ function RunCardTab({ card }: { card: RunCard }) {
         </RunCardPanel>
       </div>
 
-      <RunCardPanel title={i18n.t("runDetail.artifactChecksums")} icon={FileCheck2}>
-        {artifacts.length > 0 ? (
+      {(card.dsr || card.attribution || card.cost_sensitivity) && (
+        <div className="grid gap-4 xl:grid-cols-3">
+          {card.dsr && <DsrPanel dsr={card.dsr} />}
+          {card.attribution && <AttributionPanel attribution={card.attribution} />}
+          {card.cost_sensitivity && <CostSensitivityPanel cost={card.cost_sensitivity} />}
+        </div>
+      )}
+
+      <RunCardPanel title={i18n.t("runDetail.artifactChecksums")} icon={FileCheck2}>        {artifacts.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -477,8 +487,105 @@ function RunCardTab({ card }: { card: RunCard }) {
   );
 }
 
-function RunCardStat({ label, value, tone = "normal" }: { label: string; value: string; tone?: "normal" | "warning" }) {
+const DSR_TONE: Record<string, string> = {
+  significant: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+  weak: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  not_significant: "bg-red-500/15 text-red-600 dark:text-red-400",
+  in_sample: "bg-zinc-500/10 text-zinc-500",
+  unavailable: "bg-zinc-500/10 text-zinc-500",
+};
+
+function DsrPanel({ dsr }: { dsr: DsrBlock }) {
+  const verdict = dsr.verdict || "unavailable";
   return (
+    <RunCardPanel title={i18n.t("runDetail.dsr")} icon={TrendingUp}>
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <span className={cn("inline-block rounded-full px-2 py-0.5 text-xs font-semibold", DSR_TONE[verdict] || DSR_TONE.unavailable)}>
+            {verdict}
+          </span>
+          {dsr.authoritative === false && (
+            <span className="text-[10px] text-muted-foreground">({i18n.t("runDetail.dsrAuthoritative")}: false)</span>
+          )}
+        </div>
+        <div className="grid grid-cols-3 gap-1 rounded-xl border border-border/60 bg-muted/20 p-3 text-center">
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{i18n.t("runDetail.dsrValue")}</p>
+            <p className="text-sm font-bold font-mono tabular-nums">{dsr.DSR != null ? dsr.DSR.toFixed(3) : i18n.t("runDetail.notAvailable")}</p>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{i18n.t("runDetail.dsrTrials")}</p>
+            <p className="text-sm font-bold font-mono tabular-nums">{dsr.n_trials != null ? String(dsr.n_trials) : i18n.t("runDetail.notAvailable")}</p>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">SR0</p>
+            <p className="text-sm font-bold font-mono tabular-nums">{dsr.sr0_annual != null ? dsr.sr0_annual.toFixed(2) : i18n.t("runDetail.notAvailable")}</p>
+          </div>
+        </div>
+        {dsr.reason && <p className="text-xs text-muted-foreground">{dsr.reason}</p>}
+      </div>
+    </RunCardPanel>
+  );
+}
+
+function AttributionPanel({ attribution }: { attribution: AttributionBlock }) {
+  const rows: Array<[string, string]> = [
+    ["beta", attribution.beta != null ? attribution.beta.toFixed(3) : i18n.t("runDetail.notAvailable")],
+    ["alpha_annual", attribution.alpha_annual != null ? attribution.alpha_annual.toFixed(4) : i18n.t("runDetail.notAvailable")],
+    ["r_squared", attribution.r_squared != null ? attribution.r_squared.toFixed(3) : i18n.t("runDetail.notAvailable")],
+    ["alpha_contribution", attribution.alpha_contribution != null ? attribution.alpha_contribution.toFixed(4) : i18n.t("runDetail.notAvailable")],
+    ["beta_contribution", attribution.beta_contribution != null ? attribution.beta_contribution.toFixed(4) : i18n.t("runDetail.notAvailable")],
+    ["residual_share", attribution.residual_share != null ? attribution.residual_share.toFixed(3) : i18n.t("runDetail.notAvailable")],
+  ];
+  return (
+    <RunCardPanel title={i18n.t("runDetail.attribution")} icon={PieChart}>
+      <div className="space-y-2">
+        <table className="w-full text-sm">
+          <tbody>
+            {rows.map(([key, value]) => (
+              <tr key={key} className="border-b last:border-0">
+                <td className="py-1.5 pr-3 text-muted-foreground">{key}</td>
+                <td className="py-1.5 text-right font-mono tabular-nums">{value}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {attribution.approximation && <p className="text-[10px] italic text-muted-foreground">{attribution.approximation}</p>}
+      </div>
+    </RunCardPanel>
+  );
+}
+
+function CostSensitivityPanel({ cost }: { cost: CostSensitivityBlock }) {
+  const multipliers = Object.keys(cost).filter((k) => k !== "authoritative").sort((a, b) => Number(a) - Number(b));
+  return (
+    <RunCardPanel title={i18n.t("runDetail.costSensitivity")} icon={Coins}>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+            <th className="py-1.5 pr-3">{i18n.t("runDetail.costMultiplier")}</th>
+            <th className="py-1.5 pr-3 text-right">{i18n.t("reports.sharpe")}</th>
+            <th className="py-1.5 text-right">{i18n.t("validation.return")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {multipliers.map((m) => {
+            const row = cost[m] as { sharpe?: number; total_return?: number } | undefined;
+            return (
+              <tr key={m} className="border-b last:border-0">
+                <td className="py-1.5 pr-3 font-mono">{m}</td>
+                <td className="py-1.5 pr-3 text-right font-mono tabular-nums">{row?.sharpe != null ? row.sharpe.toFixed(2) : "-"}</td>
+                <td className="py-1.5 text-right font-mono tabular-nums">{row?.total_return != null ? (row.total_return * 100).toFixed(2) + "%" : "-"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </RunCardPanel>
+  );
+}
+
+function RunCardStat({ label, value, tone = "normal" }: { label: string; value: string; tone?: "normal" | "warning" }) {  return (
     <div className="rounded-xl border border-border/60 bg-card p-4 shadow-sm">
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className={cn("mt-1 truncate text-sm font-medium", tone === "warning" ? "text-warning" : "")}>{value}</div>

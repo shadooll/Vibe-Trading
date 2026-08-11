@@ -159,3 +159,22 @@ def test_block_bootstrap_fan_chart_shape():
     assert len(ep["steps"]) <= 400
     assert len(ep["samples"]) <= 30
     assert len(ep["actual"]) == len(ep["band_p50"]) == len(ep["steps"])
+
+
+def test_block_bootstrap_fan_chart_matches_monte_carlo_schema():
+    """3b schema 对齐：block_bootstrap 的 equity_paths 必须与 monte_carlo 同构——
+    initial_capital 键 + 五档分位带，前端 MonteCarloPathsChart 零适配复用。"""
+    rng = np.random.default_rng(3)
+    rets = rng.normal(0.001, 0.01, 250).tolist()
+    ep = block_bootstrap(rets, n_bootstrap=300, block=10, keep_paths=200)["equity_paths"]
+    # 五档带 + initial_capital（不再是旧的三档 + start）。
+    for key in ("initial_capital", "band_p5", "band_p25", "band_p50", "band_p75", "band_p95"):
+        assert key in ep, key
+    assert "start" not in ep
+    n = len(ep["steps"])
+    for key in ("actual", "band_p5", "band_p25", "band_p50", "band_p75", "band_p95"):
+        assert len(ep[key]) == n, key
+    # 分位带单调不减（同一步上 p5<=p25<=p50<=p75<=p95）。
+    for i in range(n):
+        assert ep["band_p5"][i] <= ep["band_p25"][i] <= ep["band_p50"][i] \
+            <= ep["band_p75"][i] <= ep["band_p95"][i]

@@ -202,8 +202,41 @@ function WalkForwardSection({ wf }: { wf: NonNullable<ValidationData["walk_forwa
   );
 }
 
-/* Position helpers for the mini bar visualizations */
-function barStyle(start: number, end: number, min: number, max: number) {
+function BlockBootstrapSection({ bb }: { bb: NonNullable<ValidationData["block_bootstrap"]> }) {
+  if (bb.error) return <p className="text-sm text-muted-foreground">{bb.error}</p>;
+  const profitable = bb.prob_profit >= 0.5;
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <h4 className="text-sm font-semibold">{i18n.t("validation.blockBootstrap")}</h4>
+        <Badge value={pctFmt(bb.prob_profit)} good={profitable ? true : null} />
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {i18n.t("validation.blockBootstrapDesc", { n: bb.block, iters: bb.iters.toLocaleString() })}
+        {bb.approximation ? ` ${bb.approximation}` : ""}
+      </p>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 rounded-xl border border-border/60 bg-muted/20 p-3">
+        <Stat label={i18n.t("validation.probProfit")} value={pctFmt(bb.prob_profit)} />
+        <Stat label={i18n.t("validation.origFinal")} value={bb.orig_final.toLocaleString()} />
+        <Stat label={i18n.t("validation.blockLen")} value={String(bb.block)} sub={`n=${bb.n}`} />
+        <Stat
+          label={i18n.t("validation.terminalDist")}
+          value={`[${bb.final_P5.toLocaleString()}, ${bb.final_P95.toLocaleString()}]`}
+          sub={`P50 ${bb.final_P50.toLocaleString()}`}
+        />
+      </div>
+      {/* Fan chart: block-bootstrap equity envelope, same schema as Monte Carlo */}
+      {bb.equity_paths && bb.equity_paths.steps.length > 0 && (
+        <div>
+          <p className="mb-1 text-xs font-medium text-muted-foreground">{i18n.t("validation.pathsTitle")}</p>
+          <MonteCarloPathsChart paths={bb.equity_paths} height={260} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Position helpers for the mini bar visualizations */function barStyle(start: number, end: number, min: number, max: number) {
   const range = max - min || 1;
   const left = ((start - min) / range) * 100;
   const width = ((end - start) / range) * 100;
@@ -220,8 +253,9 @@ export function ValidationPanel({ data, compact = false }: Props) {
   const hasMC = !!data.monte_carlo;
   const hasBS = !!data.bootstrap;
   const hasWF = !!data.walk_forward;
+  const hasBB = !!data.block_bootstrap;
 
-  if (!hasMC && !hasBS && !hasWF) {
+  if (!hasMC && !hasBS && !hasWF && !hasBB) {
     return <p className="p-8 text-sm text-muted-foreground">{i18n.t("validation.noData")}</p>;
   }
 
@@ -230,6 +264,7 @@ export function ValidationPanel({ data, compact = false }: Props) {
     <div className={compact ? "space-y-6" : "p-4 space-y-4"}>
       {hasMC && <section className={sectionClass}><MonteCarloSection mc={data.monte_carlo!} /></section>}
       {hasBS && <section className={sectionClass}><BootstrapSection bs={data.bootstrap!} /></section>}
+      {hasBB && <section className={sectionClass}><BlockBootstrapSection bb={data.block_bootstrap!} /></section>}
       {hasWF && <section className={sectionClass}><WalkForwardSection wf={data.walk_forward!} /></section>}
     </div>
   );

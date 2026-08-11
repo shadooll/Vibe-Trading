@@ -168,4 +168,59 @@ describe("RunDetail page", () => {
     expect(screen.getByRole("columnheader", { name: "Path" })).toHaveClass("ps-4");
     expect(screen.getByText("artifacts/result.json")).toHaveClass("ps-4");
   });
+
+  it("renders dsr / attribution / cost_sensitivity run-card blocks when present", async () => {
+    apiMock.getRun.mockResolvedValue({
+      status: "success",
+      run_id: "robust",
+      prompt: "Robust run",
+      run_card: {
+        backtest: { engine: "crypto" },
+        dsr: { DSR: 0.97, verdict: "significant", n_trials: 12, authoritative: true },
+        attribution: { beta: 0.85, alpha_annual: 0.042, r_squared: 0.61, residual_share: 0.03, approximation: "linear approx" },
+        cost_sensitivity: { authoritative: false, "1.0": { sharpe: 1.2, total_return: 0.3 }, "2.0": { sharpe: 0.9, total_return: 0.22 } },
+      } as NonNullable<RunData["run_card"]>,
+    });
+    apiMock.getRunCode.mockResolvedValue({});
+
+    renderRunDetail("/runs/robust");
+    await screen.findByText("Robust run");
+    fireEvent.click(screen.getByRole("tab", { name: "Run Card" }));
+
+    // DSR block: verdict badge + value + trials.
+    expect(await screen.findByText("Deflated Sharpe Ratio")).toBeInTheDocument();
+    expect(screen.getByText("significant")).toBeInTheDocument();
+    expect(screen.getByText("0.970")).toBeInTheDocument();
+    expect(screen.getByText("12")).toBeInTheDocument();
+
+    // Attribution block.
+    expect(screen.getByText("Alpha / Beta Attribution")).toBeInTheDocument();
+    expect(screen.getByText("0.850")).toBeInTheDocument();
+    expect(screen.getByText("linear approx")).toBeInTheDocument();
+
+    // Cost sensitivity block: both multiplier rows.
+    expect(screen.getByText("Cost Sensitivity")).toBeInTheDocument();
+    expect(screen.getByText("1.0")).toBeInTheDocument();
+    expect(screen.getByText("2.0")).toBeInTheDocument();
+    expect(screen.getByText("30.00%")).toBeInTheDocument();
+  });
+
+  it("omits the robustness blocks entirely when the run-card lacks them", async () => {
+    apiMock.getRun.mockResolvedValue({
+      status: "success",
+      run_id: "plain",
+      prompt: "Plain run",
+      run_card: { backtest: { engine: "vectorized" } } as NonNullable<RunData["run_card"]>,
+    });
+    apiMock.getRunCode.mockResolvedValue({});
+
+    renderRunDetail("/runs/plain");
+    await screen.findByText("Plain run");
+    fireEvent.click(screen.getByRole("tab", { name: "Run Card" }));
+
+    expect(await screen.findByText("Backtest Summary")).toBeInTheDocument();
+    expect(screen.queryByText("Deflated Sharpe Ratio")).not.toBeInTheDocument();
+    expect(screen.queryByText("Alpha / Beta Attribution")).not.toBeInTheDocument();
+    expect(screen.queryByText("Cost Sensitivity")).not.toBeInTheDocument();
+  });
 });

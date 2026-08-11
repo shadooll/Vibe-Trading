@@ -553,6 +553,23 @@ export interface ValidationData {
     sharpe_std: number;
     error?: string;
   };
+  /** Block-bootstrap resampling over daily returns (spec §3). Fan-chart payload
+   * shares the MonteCarloEquityPaths schema (initial_capital + five bands). */
+  block_bootstrap?: {
+    n: number;
+    iters: number;
+    block: number;
+    prob_profit: number;
+    orig_final: number;
+    final_P5: number;
+    final_P50: number;
+    final_P95: number;
+    mean_ret: number;
+    unit?: string;
+    approximation?: string;
+    equity_paths?: MonteCarloEquityPaths;
+    error?: string;
+  };
 }
 
 export interface RunData {
@@ -578,6 +595,46 @@ export interface RunData {
   run_logs?: Array<{ source?: string; line_number?: number; message?: string }>;
 }
 
+/** Deflated Sharpe Ratio verdict block (spec §2.2). Present only on the agent
+ * search path with a three-way split; DSR/verdict degrade to null/unavailable. */
+export interface DsrBlock {
+  n_trials?: number;
+  sr_var?: number | null;
+  observed_sharpe_annual?: number | null;
+  sr0_annual?: number | null;
+  T_days?: number;
+  skew?: number | null;
+  kurtosis?: number | null;
+  DSR?: number | null;
+  verdict?: "significant" | "weak" | "not_significant" | "in_sample" | "unavailable";
+  reason?: string;
+  authoritative?: boolean;
+  search_id?: string;
+}
+
+/** alpha/beta return attribution (spec §5). Null when no benchmark. */
+export interface AttributionBlock {
+  beta?: number;
+  alpha_annual?: number;
+  r_squared?: number;
+  beta_contribution?: number;
+  alpha_contribution?: number;
+  alpha_arith?: number;
+  beta_arith?: number;
+  residual?: number;
+  residual_share?: number;
+  approximation?: string;
+  net_exposure?: number;
+  net_exposure_invested?: number;
+  gross_exposure?: number;
+}
+
+/** Cost-sensitivity sweep (spec §6). Keys are cost multipliers ("0.5","1.0",...). */
+export interface CostSensitivityBlock {
+  authoritative: false;
+  [multiplier: string]: unknown;
+}
+
 export interface RunCard {
   schema_version?: string;
   generated_at?: string;
@@ -589,6 +646,10 @@ export interface RunCard {
   validation?: unknown;
   warnings?: string[];
   artifacts?: RunCardArtifact[];
+  dsr?: DsrBlock;
+  attribution?: AttributionBlock | null;
+  cost_sensitivity?: CostSensitivityBlock;
+  segments?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
