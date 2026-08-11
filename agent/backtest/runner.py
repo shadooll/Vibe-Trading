@@ -1370,17 +1370,12 @@ def _isolate_test_segment(data_map: dict, config: dict, run_dir: Path) -> Option
     Fail-closed: an unwritable holdout dir raises so the run aborts rather than
     silently running un-isolated.
     """
-    from backtest.trials import sanitize_search_id
+    from backtest.trials import current_search_id
 
     valid_end = config.get("valid_end")
     if not valid_end:
         return None
-    try:
-        from src.config.accessor import get_env_config
-        search_id = sanitize_search_id(get_env_config().paths.vibe_trading_search_id)
-    except Exception:
-        search_id = None
-    if search_id is None:
+    if current_search_id() is None:
         return None
 
     boundary = pd.Timestamp(valid_end)

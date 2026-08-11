@@ -89,7 +89,6 @@ def check_signal_causality(
 
     # Pin the global RNG so a generate that draws from np.random is at least
     # reproducible across the full and truncated calls.
-    np.random.default_rng(seed)
     np.random.seed(seed)
 
     try:

@@ -954,16 +954,10 @@ class BaseEngine(ABC):
         """
         from datetime import datetime, timezone
 
-        try:
-            from src.config.accessor import get_env_config
-            raw_search = get_env_config().paths.vibe_trading_search_id
-        except Exception:
-            raw_search = ""
-
         from backtest.trials import (
             append_trial,
             config_hash,
-            sanitize_search_id,
+            current_search_id,
         )
 
         strategy_file = run_dir / "code" / "signal_engine.py"
@@ -974,9 +968,9 @@ class BaseEngine(ABC):
         # Only the agent path (server-set VIBE_TRADING_SEARCH_ID) records a
         # trial. A CLI/legacy/test run has no search marker; writing it would
         # pollute the real ledger (and the developer's real ~/.vibe-trading).
-        # Sanitize to drop a forged/absent id so trials never group on an
-        # attacker-chosen key.
-        search_id = sanitize_search_id(raw_search)
+        # current_search_id sanitises and drops a forged/absent id so trials
+        # never group on an attacker-chosen key.
+        search_id = current_search_id()
         if search_id is None:
             return "skipped"
 
@@ -1025,13 +1019,8 @@ class BaseEngine(ABC):
         """
         if not config.get("valid_end"):
             return None
-        try:
-            from src.config.accessor import get_env_config
-            raw_search = get_env_config().paths.vibe_trading_search_id
-        except Exception:
-            raw_search = ""
-        from backtest.trials import run_dsr, sanitize_search_id
-        search_id = sanitize_search_id(raw_search)
+        from backtest.trials import current_search_id, run_dsr
+        search_id = current_search_id()
         if search_id is None:
             return None
         try:
@@ -1639,13 +1628,8 @@ class BaseEngine(ABC):
     @staticmethod
     def _is_search_marked() -> bool:
         """Whether this run carries a server-supplied search id (agent path)."""
-        try:
-            from src.config.accessor import get_env_config
-            raw = get_env_config().paths.vibe_trading_search_id
-        except Exception:
-            return False
-        from backtest.trials import sanitize_search_id
-        return sanitize_search_id(raw) is not None
+        from backtest.trials import current_search_id
+        return current_search_id() is not None
 
     def _trim_ohlcv_beyond_valid_end(self, artifacts_dir: Path, valid_end: "str | None") -> None:
         """Drop OHLCV rows past valid_end on the agent path (spec §4.4, 2b).

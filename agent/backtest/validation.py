@@ -157,6 +157,38 @@ def deflated_sharpe_ratio(
 # ─── Block Bootstrap Monte Carlo ───
 
 
+def _equity_paths_payload(
+    paths_matrix: "np.ndarray",
+    actual: "np.ndarray",
+    initial_capital: float,
+    n_cols: int = 400,
+    n_rows: int = 30,
+) -> Dict[str, Any]:
+    """Build the fan-chart payload shared by monte_carlo_test and block_bootstrap.
+
+    Single schema (initial_capital + five percentile bands + row-sampled paths)
+    so the frontend renders both with MonteCarloPathsChart unchanged. Keeping the
+    construction here eliminates the two-site schema-drift trap. ``paths_matrix``
+    is (n_paths, n_steps); ``actual`` is the observed equity series (n_steps).
+    """
+    n_steps = paths_matrix.shape[1]
+    col_idx = np.unique(np.linspace(0, n_steps - 1, min(n_steps, n_cols)).astype(int))
+    sample_rows = np.unique(
+        np.linspace(0, paths_matrix.shape[0] - 1, min(n_rows, paths_matrix.shape[0])).astype(int)
+    )
+    payload: Dict[str, Any] = {
+        "steps": (col_idx + 1).tolist(),
+        "initial_capital": round(float(initial_capital), 2),
+        "actual": np.round(actual[col_idx], 2).tolist(),
+    }
+    for q in (5, 25, 50, 75, 95):
+        payload[f"band_p{q}"] = np.round(
+            np.percentile(paths_matrix[:, col_idx], q, axis=0), 2
+        ).tolist()
+    payload["samples"] = np.round(paths_matrix[np.ix_(sample_rows, col_idx)], 2).tolist()
+    return payload
+
+
 def block_bootstrap(
     returns: Sequence[float],
     n_bootstrap: int = 5000,
@@ -237,24 +269,11 @@ def block_bootstrap(
     }
 
     # Fan-chart payload: downsample along steps (<=400) and along paths (<=30).
-    # Schema mirrors monte_carlo_test.equity_paths exactly (initial_capital +
-    # five percentile bands + row-sampled paths) so the frontend can render both
-    # with the same MonteCarloPathsChart component without adaptation.
-    col_idx = np.unique(np.linspace(0, N - 1, min(N, 400)).astype(int))
-    sample_rows = np.unique(
-        np.linspace(0, kept.shape[0] - 1, min(30, kept.shape[0])).astype(int)
+    # Schema mirrors monte_carlo_test.equity_paths exactly (shared builder) so the
+    # frontend renders both with MonteCarloPathsChart unchanged.
+    result["equity_paths"] = _equity_paths_payload(
+        kept, start * np.cumprod(1.0 + rets), start,
     )
-    result["equity_paths"] = {
-        "steps": (col_idx + 1).tolist(),
-        "initial_capital": round(float(start), 2),
-        "actual": np.round((start * np.cumprod(1.0 + rets))[col_idx], 2).tolist(),
-        "band_p5": np.round(np.percentile(kept[:, col_idx], 5, axis=0), 2).tolist(),
-        "band_p25": np.round(np.percentile(kept[:, col_idx], 25, axis=0), 2).tolist(),
-        "band_p50": np.round(np.percentile(kept[:, col_idx], 50, axis=0), 2).tolist(),
-        "band_p75": np.round(np.percentile(kept[:, col_idx], 75, axis=0), 2).tolist(),
-        "band_p95": np.round(np.percentile(kept[:, col_idx], 95, axis=0), 2).tolist(),
-        "samples": np.round(kept[np.ix_(sample_rows, col_idx)], 2).tolist(),
-    }
     return result
 
 
@@ -330,21 +349,9 @@ def monte_carlo_test(
         "sharpe_samples": [round(float(s), 4) for s in sim_sharpes],
     }
     if sim_equities is not None:
-        idx = np.unique(np.linspace(0, len(pnls) - 1, min(len(pnls), 400)).astype(int))
-        sample_rows = np.unique(
-            np.linspace(0, n_simulations - 1, min(30, n_simulations)).astype(int)
+        result["equity_paths"] = _equity_paths_payload(
+            sim_equities, initial_capital + np.cumsum(pnls), initial_capital,
         )
-        result["equity_paths"] = {
-            "steps": (idx + 1).tolist(),
-            "initial_capital": round(float(initial_capital), 2),
-            "actual": np.round((initial_capital + np.cumsum(pnls))[idx], 2).tolist(),
-            "band_p5": np.round(np.percentile(sim_equities[:, idx], 5, axis=0), 2).tolist(),
-            "band_p25": np.round(np.percentile(sim_equities[:, idx], 25, axis=0), 2).tolist(),
-            "band_p50": np.round(np.percentile(sim_equities[:, idx], 50, axis=0), 2).tolist(),
-            "band_p75": np.round(np.percentile(sim_equities[:, idx], 75, axis=0), 2).tolist(),
-            "band_p95": np.round(np.percentile(sim_equities[:, idx], 95, axis=0), 2).tolist(),
-            "samples": np.round(sim_equities[np.ix_(sample_rows, idx)], 2).tolist(),
-        }
     return result
 
 

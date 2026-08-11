@@ -92,6 +92,23 @@ def sanitize_search_id(value: Any) -> Optional[str]:
     return value if _SEARCH_ID_RE.match(value) else None
 
 
+def current_search_id() -> Optional[str]:
+    """Return the active server-supplied search id, or None if not search-marked.
+
+    Single source of truth for "which env var, sanitised how" — the four call
+    sites that need it (trial ledger append, DSR, search-marker check, OOS
+    isolation) all read through here so the EnvConfig field and the charset
+    check stay in one place. Returns None (never raises) when the config layer
+    is unavailable or no valid id is set.
+    """
+    try:
+        from src.config.accessor import get_env_config
+        raw = get_env_config().paths.vibe_trading_search_id
+    except Exception:
+        return None
+    return sanitize_search_id(raw)
+
+
 def ledger_path(root: Optional[Path] = None) -> Path:
     """Return the ledger path under the runtime root."""
     if root is None:
