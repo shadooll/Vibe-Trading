@@ -116,6 +116,8 @@ Self-check after writing `signal_engine.py`:
   "codes": ["000001.SZ"],
   "start_date": "2016-03-18",
   "end_date": "2026-03-18",
+  "train_end": "2023-12-31",
+  "valid_end": "2025-06-30",
   "interval": "1D",
   "initial_cash": 1000000,
   "commission": 0.001,
@@ -135,6 +137,7 @@ Self-check after writing `signal_engine.py`:
   - The annualization factor for minute backtests is inferred automatically from `source` (252 trading days for China A-shares, 365 calendar days for crypto)
   - Minute backtests can be very data-heavy. Recommended limits are no more than 30 days for `1m`, or 1 year for `1H`
 - `extra_fields`: China A-shares can use values such as `["pe", "pb", "roe"]`; other markets should use `null`
+- **`train_end` / `valid_end`**: optional three-way split boundaries. **Always set both when developing/optimizing a strategy** — they unlock the anti-overfitting metrics (`unified_score`, `validation_insufficient`, DSR). Split rule: train = `[start_date, train_end)`, valid = `[train_end, valid_end)`, test = `[valid_end, end_date]`. Both must be given together, with `start_date < train_end < valid_end <= end_date`. Recommended: train ≈ 60–70% of the span, valid ≈ 15–20%, test = the most recent untouched segment. Tune only on train/valid; treat test as the held-out final check. Omit both for a plain full-sample run (legacy behaviour, no robustness metrics)
 - `fundamental_fields`: optional China A-share statement fields, such as `{"income": ["total_revenue", "n_income"], "fina_indicator": ["roe"]}`; use `null` unless the strategy needs financial statement pre-filtering
 - `optimizer`: optional, one of `"equal_volatility"` / `"risk_parity"` / `"mean_variance"` / `"max_diversification"` / `"turnover_aware"` / `null` (equal-weight by default)
 - `optimizer_params`: optimizer parameters, such as `{"lookback": 60}`. `mean_variance` additionally supports `{"risk_free": 0.0}`; `turnover_aware` supports `{"risk_aversion": 1.0, "turnover_penalty": 0.5}` (L1 penalty on weight changes; tune to data frequency)
@@ -171,12 +174,24 @@ Self-check after writing `signal_engine.py`:
 - Poor return / low Sharpe alone should not push the score below 60; they are optimization suggestions only
 - `score ≥ 60` = `passed=true`
 
+### Overfitting Gates (when `train_end` + `valid_end` are set)
+
+When the config used a three-way split, `metrics.csv` / `run_card.json` carry robustness metrics. Judge with them, not raw Sharpe:
+
+- **`unified_score`** = `valid_sharpe − 0.5 · max(0, train_sharpe − valid_sharpe)`. This is the **primary quality signal** — it penalises "train much better than valid". Higher is better; prefer it over full-sample Sharpe when comparing candidates. `null`/absent → the split produced no usable valid segment (treat as a warning).
+- **`validation_insufficient`**: `"valid"` (valid segment < 50 trades), `"test"` (empty test), or `"overall"` (< 30 total trades). Any non-empty value → too few trades to trust the statistics → cap `score < 60` and add an action_item to widen the universe/period or relax entry filters.
+- **`dsr.verdict`** (only on the agent search path): `significant` / `weak` → acceptable; `not_significant` → the result is consistent with luck across the trials tried → cap `score < 60`; `in_sample` / `unavailable` → no OOS conclusion, do not treat as evidence of edge.
+- **`train_sharpe ≫ valid_sharpe`** (large positive gap) → classic overfit → recommend simplification (fewer params, longer windows), not further tuning on train.
+
+If the run has **no** `train_end`/`valid_end`, fall back to the plain criteria above (full-sample Sharpe/drawdown) and note that no out-of-sample robustness check was possible.
+
 ### Bug Categories (reduce the score)
 
 1. **Zero trades** (`trade_count=0`): signal-logic bug, conditions may be too strict
 2. **Late first trade** (first trade > 2 years after backtest start): data-filtering bug or overly long lookback window
 3. **Capital utilization < 50%**: position-management bug, portfolio is flat most of the time
 4. **Open position at the end** (positions still open when backtest ends): exit-signal timing bug
+5. **Overfitting** (only when a split is present): `unified_score` is `null`, `validation_insufficient` is set, `dsr.verdict == "not_significant"`, or `train_sharpe` far exceeds `valid_sharpe` — the strategy memorised the training segment
 
 ### `action_items` Format
 

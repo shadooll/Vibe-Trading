@@ -13,7 +13,20 @@ This document defines strategy-specific evaluation metrics that supplement the f
 | Calmar Ratio | Annual Return / Max Drawdown | > 2.0 | 1.0 - 2.0 | 0.0 - 1.0 | < 0.0 |
 | Max Drawdown | peak-to-trough decline | < 15% | 15% - 25% | 25% - 40% | > 40% |
 
-### 1.2 Secondary Metrics
+### 1.2 Out-of-Sample Robustness Metrics (preferred when a three-way split is used)
+
+When the backtest config set `train_end` + `valid_end`, the run emits split-aware metrics that are far harder to fool than full-sample Sharpe. **Use these as the primary gates whenever present.**
+
+| Metric | Definition | Alive | Insufficient / Overfit |
+|--------|-----------|-------|------------------------|
+| `unified_score` | `valid_sharpe − 0.5·max(0, train_sharpe − valid_sharpe)` | > 0 (higher = better) | `null` (no usable valid segment) or ≤ 0 |
+| `validation_insufficient` | trade-count floor: `"valid"` (<50 valid trades) / `"test"` (empty test) / `"overall"` (<30 total) | empty (key absent) | any non-empty value → do not trust the stats |
+| `dsr.verdict` | Deflated Sharpe across the search trials | `significant` (≥0.95) / `weak` (0.90–0.95) | `not_significant` (<0.90); `in_sample`/`unavailable` = no OOS conclusion |
+| `train−valid Sharpe gap` | `train_sharpe − valid_sharpe` | small / negative | large positive gap → memorised the training segment |
+
+`unified_score` penalises the "train much better than valid" overfitting signature directly. `dsr.verdict` is only present on the agent search path (it requires trial-ledger accounting); treat its absence as "no search-accounted conclusion", not as a pass.
+
+### 1.3 Secondary Metrics
 
 | Metric | Formula | Healthy | Warning | Decayed | Critical |
 |--------|---------|---------|---------|---------|----------|
@@ -21,7 +34,7 @@ This document defines strategy-specific evaluation metrics that supplement the f
 | Profit Factor | gross profit / gross loss | > 1.5 | 1.2 - 1.5 | 1.0 - 1.2 | < 1.0 |
 | Avg Trade Duration | mean holding period in bars | per strategy type | -- | -- | -- |
 
-### 1.3 Metric Definitions
+### 1.4 Metric Definitions
 
 **Sharpe Ratio**: The excess return per unit of total risk. Uses annualized return minus the risk-free rate, divided by annualized standard deviation of returns. The primary metric for strategy health assessment.
 
@@ -67,16 +80,24 @@ Profit Factor = sum(positive PnL) / |sum(negative PnL)|
 
 **Avg Trade Duration**: The mean number of bars (trading days) between entry and exit across all closed trades. This metric has no universal threshold; it is evaluated relative to the strategy's stated holding horizon.
 
-### 1.4 Evaluation Priority
+### 1.5 Evaluation Priority
 
-When evaluating a strategy backtest, check metrics in this order:
+When evaluating a strategy backtest, check metrics in this order. **If a three-way split was used, lead with the out-of-sample metrics (§1.2); otherwise fall back to the full-sample gates.**
 
-1. **Sharpe Ratio** -- primary gate; must exceed 0.5 for the artifact to be considered alive
-2. **Max Drawdown** -- risk tolerance gate; must be below 30% for the artifact to be considered alive
+Split present (`unified_score` available):
+1. **`validation_insufficient`** -- must be empty; any value = too few trades to judge, stop here
+2. **`unified_score`** -- primary gate; must be > 0 (prefer higher when comparing candidates)
+3. **`dsr.verdict`** -- when present, must be `significant` or `weak`
+4. **Max Drawdown** -- risk tolerance gate; below 30%
+5. **Win Rate and Profit Factor** -- additional context
+
+No split (legacy full-sample run):
+1. **Sharpe Ratio** -- primary gate; must exceed 0.5 (note: no out-of-sample check was possible)
+2. **Max Drawdown** -- risk tolerance gate; must be below 30%
 3. **Sortino Ratio** -- secondary confirmation of risk-adjusted performance
-4. **Win Rate and Profit Factor** -- additional context for strategy characterization
+4. **Win Rate and Profit Factor** -- additional context
 
-A strategy fails the minimum threshold if Sharpe < 0.5 OR Max Drawdown > 30%.
+A split run fails the minimum threshold if `validation_insufficient` is set OR `unified_score` ≤ 0 OR (when present) `dsr.verdict == "not_significant"`. A no-split run fails if Sharpe < 0.5 OR Max Drawdown > 30%.
 
 ## 2. Strategy Decay Monitoring
 

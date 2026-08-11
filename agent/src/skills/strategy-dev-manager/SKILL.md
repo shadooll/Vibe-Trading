@@ -103,10 +103,12 @@ Judge the backtest output against quality thresholds.
    - IR > 0.5 (stable effectiveness)
    - IC positive ratio > 55% (directional stability)
 
-2. **For strategies**: read `artifacts/metrics.csv` and `run_card.json`. Check:
-   - Sharpe ratio > 0.5 (minimum acceptable)
-   - Max drawdown < 30% (risk tolerance)
-   - Win rate and profit factor for additional context
+2. **For strategies**: read `artifacts/metrics.csv` and `run_card.json`. **Prefer the out-of-sample robustness metrics when a three-way split (`train_end`/`valid_end`) was used** — full-sample Sharpe is easily fooled by overfitting:
+   - **Primary**: `unified_score` (= `valid_sharpe − 0.5·max(0, train_sharpe − valid_sharpe)`) — require it present and > 0. This is the main selection signal.
+   - **Statistical trust**: `validation_insufficient` must be empty (any of `"valid"`/`"test"`/`"overall"` = too few trades → not trustworthy).
+   - **Search-accounted**: if `run_card.json` has `dsr`, require `dsr.verdict` ∈ {`significant`, `weak`} (DSR ≥ 0.90) — `not_significant` = consistent with luck across trials.
+   - **Fallback** (no split / legacy run): Sharpe ratio > 0.5 (minimum acceptable) and Max drawdown < 30% (risk tolerance), and note that no out-of-sample check was possible.
+   - Win rate and profit factor for additional context.
 
 3. **If the artifact is alive** (meets thresholds):
    - For factors: register into `factors/zoo/` and update status to "active"
@@ -193,7 +195,7 @@ Self-check before marking any phase complete:
 - [ ] Deduplication check passed (IC < 0.99 against existing alphas)
 - [ ] SignalEngine passes AST validation
 - [ ] Backtest completed without errors
-- [ ] IC/IR or Sharpe meets minimum thresholds
+- [ ] IC/IR or Sharpe meets minimum thresholds (for strategies with a split: `unified_score` > 0, `validation_insufficient` empty, `dsr.verdict` acceptable)
 - [ ] Artifact registered in the strategy store with correct status
 
 ## Common Pitfalls
