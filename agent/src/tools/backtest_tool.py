@@ -12,11 +12,14 @@ from src.core.runner import Runner
 from src.tools.path_utils import safe_run_dir
 
 
-def run_backtest(run_dir: str) -> str:
+def run_backtest(run_dir: str, search_session_id: str | None = None) -> str:
     """Run backtest: validate config.json + signal_engine.py, invoke built-in engine.
 
     Args:
         run_dir: Path to the run directory.
+        search_session_id: Optional host-injected session id used as the
+            search-accounting group id (server path). When None (CLI/legacy),
+            the search id falls back to the existing env-config chain below.
 
     Returns:
         JSON-formatted execution result.
@@ -59,17 +62,19 @@ def run_backtest(run_dir: str) -> str:
     # Trial-ledger search accounting: give the subprocess a server-side search
     # id (never config.json — run_card's config_hash is a file hash of it) and
     # the REAL runtime root so the ledger lands in ~/.vibe-trading, not the
-    # ephemeral sandbox HOME the Runner builds. The search id is the server
-    # session id (VIBE_GOAL_SESSION_ID) when present; the subprocess revalidates
-    # the charset and fails closed if the ledger write fails.
+    # ephemeral sandbox HOME the Runner builds. The search id is the host's real
+    # session id (injected via the constructor on the server/API path) first,
+    # then the env-config chain (VIBE_GOAL_SESSION_ID / VIBE_TRADING_SEARCH_ID);
+    # the subprocess revalidates the charset and fails closed if the write fails.
     from src.config.accessor import get_env_config
     from src.config.paths import get_runtime_root
     _cfg = get_env_config()
     extra_env: dict[str, str] = {"VIBE_TRADING_HOME": str(get_runtime_root())}
-    _session = getattr(getattr(_cfg, "paths", None), "vibe_goal_session_id", "") or ""
     from backtest.trials import sanitize_search_id
-    _search = sanitize_search_id(_session) or sanitize_search_id(
-        getattr(getattr(_cfg, "paths", None), "vibe_trading_search_id", "")
+    _search = (
+        sanitize_search_id(search_session_id)
+        or sanitize_search_id(getattr(getattr(_cfg, "paths", None), "vibe_goal_session_id", "") or "")
+        or sanitize_search_id(getattr(getattr(_cfg, "paths", None), "vibe_trading_search_id", ""))
     )
     if _search:
         extra_env["VIBE_TRADING_SEARCH_ID"] = _search
@@ -109,6 +114,15 @@ class BacktestTool(BaseTool):
     repeatable = True
     is_readonly = False
 
+    def __init__(self, *, default_session_id: str | None = None) -> None:
+        """Inject the host session id (server/API path) for search accounting.
+
+        The LLM never knows the session id; the host runtime injects it at
+        construction (same pattern as the goal tools). None on CLI/legacy —
+        run_backtest then falls back to the env-config chain unchanged.
+        """
+        self._default_session_id = default_session_id
+
     def execute(self, **kwargs) -> str:
         """Execute backtest."""
-        return run_backtest(kwargs["run_dir"])
+        return run_backtest(kwargs["run_dir"], search_session_id=self._default_session_id)

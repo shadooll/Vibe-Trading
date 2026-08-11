@@ -120,6 +120,7 @@ def build_registry(
         UpdateResearchGoalStatusTool,
     )
     from src.tools.autopilot_tool import RunResearchAutopilotTool
+    from src.tools.backtest_tool import BacktestTool
     from src.tools.remember_tool import RememberTool
     from src.tools.swarm_tool import SwarmTool
 
@@ -145,6 +146,12 @@ def build_registry(
                 registry.register(cls(memory=persistent_memory))
             elif cls in session_injected_classes:
                 registry.register(cls(default_session_id=session_id, event_callback=event_callback))
+            elif cls is BacktestTool:
+                # Search accounting (review S-H1): inject the host session id so
+                # web/API backtests activate the trial ledger / DSR / OOS
+                # isolation. CLI/legacy callers pass session_id=None → the tool
+                # falls back to the env-config chain, behaviour unchanged.
+                registry.register(cls(default_session_id=session_id))
             elif cls is SwarmTool:
                 registry.register(cls(include_shell_tools=include_shell_tools, event_callback=event_callback))
             else:
