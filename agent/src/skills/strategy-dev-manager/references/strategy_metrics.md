@@ -17,12 +17,14 @@ This document defines strategy-specific evaluation metrics that supplement the f
 
 When the backtest config set `train_end` + `valid_end`, the run emits split-aware metrics that are far harder to fool than full-sample Sharpe. **Use these as the primary gates whenever present.**
 
+> **Where to read them**: `run_card.json` / `metrics.json`. `segments` is a nested block and is **stripped from `metrics.csv`** (scalar-only). Per-segment Sharpe is at `segments.train.sharpe` / `segments.valid.sharpe` — there are no top-level `train_sharpe`/`valid_sharpe` keys. These metrics exist **only** when both `train_end` and `valid_end` are set; their absence means "no split was run", not "passed".
+
 | Metric | Definition | Alive | Insufficient / Overfit |
 |--------|-----------|-------|------------------------|
-| `unified_score` | `valid_sharpe − 0.5·max(0, train_sharpe − valid_sharpe)` | > 0 (higher = better) | `null` (no usable valid segment) or ≤ 0 |
-| `validation_insufficient` | trade-count floor: `"valid"` (<50 valid trades) / `"test"` (empty test) / `"overall"` (<30 total) | empty (key absent) | any non-empty value → do not trust the stats |
+| `unified_score` | `segments.valid.sharpe − 0.5·max(0, segments.train.sharpe − segments.valid.sharpe)` (top-level scalar) | > 0 (higher = better) | `null` (no usable valid segment) or ≤ 0 |
+| `validation_insufficient` | trade-count floor: `"valid"` (<50 valid trades) / `"test"` (empty test) / `"overall"` (<30 total) (top-level scalar) | empty (key absent) | any non-empty value → do not trust the stats |
 | `dsr.verdict` | Deflated Sharpe across the search trials | `significant` (≥0.95) / `weak` (0.90–0.95) | `not_significant` (<0.90); `in_sample`/`unavailable` = no OOS conclusion |
-| `train−valid Sharpe gap` | `train_sharpe − valid_sharpe` | small / negative | large positive gap → memorised the training segment |
+| train−valid Sharpe gap | `segments.train.sharpe − segments.valid.sharpe` | small / negative | large positive gap → memorised the training segment |
 
 `unified_score` penalises the "train much better than valid" overfitting signature directly. `dsr.verdict` is only present on the agent search path (it requires trial-ledger accounting); treat its absence as "no search-accounted conclusion", not as a pass.
 

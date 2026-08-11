@@ -103,8 +103,8 @@ Judge the backtest output against quality thresholds.
    - IR > 0.5 (stable effectiveness)
    - IC positive ratio > 55% (directional stability)
 
-2. **For strategies**: read `artifacts/metrics.csv` and `run_card.json`. **Prefer the out-of-sample robustness metrics when a three-way split (`train_end`/`valid_end`) was used** — full-sample Sharpe is easily fooled by overfitting:
-   - **Primary**: `unified_score` (= `valid_sharpe − 0.5·max(0, train_sharpe − valid_sharpe)`) — require it present and > 0. This is the main selection signal.
+2. **For strategies**: read `run_card.json` (the `segments` block is nested and is stripped from the scalar-only `metrics.csv`). **Prefer the out-of-sample robustness metrics when a three-way split (`train_end`/`valid_end`) was used** — full-sample Sharpe is easily fooled by overfitting. Note: `unified_score` / `validation_insufficient` / `segments` are produced **only** when both `train_end` and `valid_end` are set; their absence means "no split", not "passed".
+   - **Primary**: `unified_score` (= `segments.valid.sharpe − 0.5·max(0, segments.train.sharpe − segments.valid.sharpe)`) — require it present and > 0. This is the main selection signal.
    - **Statistical trust**: `validation_insufficient` must be empty (any of `"valid"`/`"test"`/`"overall"` = too few trades → not trustworthy).
    - **Search-accounted**: if `run_card.json` has `dsr`, require `dsr.verdict` ∈ {`significant`, `weak`} (DSR ≥ 0.90) — `not_significant` = consistent with luck across trials.
    - **Fallback** (no split / legacy run): Sharpe ratio > 0.5 (minimum acceptable) and Max drawdown < 30% (risk tolerance), and note that no out-of-sample check was possible.

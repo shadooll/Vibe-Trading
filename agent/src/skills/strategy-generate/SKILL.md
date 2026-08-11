@@ -176,12 +176,12 @@ Self-check after writing `signal_engine.py`:
 
 ### Overfitting Gates (when `train_end` + `valid_end` are set)
 
-When the config used a three-way split, `metrics.csv` / `run_card.json` carry robustness metrics. Judge with them, not raw Sharpe:
+When the config used a three-way split, the run carries robustness metrics. Judge with them, not raw Sharpe. **Where to read them**: `run_card.json` (or `metrics.json`) — the `segments` block is nested and is **stripped from `metrics.csv`** (which keeps only scalars). Per-segment Sharpe lives at `segments.train.sharpe` / `segments.valid.sharpe`; there are **no** top-level `train_sharpe`/`valid_sharpe` keys. These keys are produced **only** when both `train_end` and `valid_end` are set — their absence means "no split was run", NOT "passed".
 
-- **`unified_score`** = `valid_sharpe − 0.5 · max(0, train_sharpe − valid_sharpe)`. This is the **primary quality signal** — it penalises "train much better than valid". Higher is better; prefer it over full-sample Sharpe when comparing candidates. `null`/absent → the split produced no usable valid segment (treat as a warning).
-- **`validation_insufficient`**: `"valid"` (valid segment < 50 trades), `"test"` (empty test), or `"overall"` (< 30 total trades). Any non-empty value → too few trades to trust the statistics → cap `score < 60` and add an action_item to widen the universe/period or relax entry filters.
+- **`unified_score`** (top-level scalar) = `segments.valid.sharpe − 0.5 · max(0, segments.train.sharpe − segments.valid.sharpe)`. This is the **primary quality signal** — it penalises "train much better than valid". Higher is better; prefer it over full-sample Sharpe when comparing candidates. `null`/absent → the split produced no usable valid segment (treat as a warning).
+- **`validation_insufficient`** (top-level scalar): `"valid"` (valid segment < 50 trades), `"test"` (empty test), or `"overall"` (< 30 total trades). Any non-empty value → too few trades to trust the statistics → cap `score < 60` and add an action_item to widen the universe/period or relax entry filters.
 - **`dsr.verdict`** (only on the agent search path): `significant` / `weak` → acceptable; `not_significant` → the result is consistent with luck across the trials tried → cap `score < 60`; `in_sample` / `unavailable` → no OOS conclusion, do not treat as evidence of edge.
-- **`train_sharpe ≫ valid_sharpe`** (large positive gap) → classic overfit → recommend simplification (fewer params, longer windows), not further tuning on train.
+- **`segments.train.sharpe ≫ segments.valid.sharpe`** (large positive gap) → classic overfit → recommend simplification (fewer params, longer windows), not further tuning on train.
 
 If the run has **no** `train_end`/`valid_end`, fall back to the plain criteria above (full-sample Sharpe/drawdown) and note that no out-of-sample robustness check was possible.
 
@@ -191,7 +191,7 @@ If the run has **no** `train_end`/`valid_end`, fall back to the plain criteria a
 2. **Late first trade** (first trade > 2 years after backtest start): data-filtering bug or overly long lookback window
 3. **Capital utilization < 50%**: position-management bug, portfolio is flat most of the time
 4. **Open position at the end** (positions still open when backtest ends): exit-signal timing bug
-5. **Overfitting** (only when a split is present): `unified_score` is `null`, `validation_insufficient` is set, `dsr.verdict == "not_significant"`, or `train_sharpe` far exceeds `valid_sharpe` — the strategy memorised the training segment
+5. **Overfitting** (only when a split is present): `unified_score` is `null`, `validation_insufficient` is set, `dsr.verdict == "not_significant"`, or `segments.train.sharpe` far exceeds `segments.valid.sharpe` — the strategy memorised the training segment
 
 ### `action_items` Format
 
