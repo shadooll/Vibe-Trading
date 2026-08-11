@@ -904,7 +904,10 @@ class BaseEngine(ABC):
         # DSR compute significance on a partial trial set.
         ledger_error = self._append_trial_ledger(config, run_dir, equity_series, m)
         ledger_ok = ledger_error is None
-        if ledger_error is not None:
+        # Only a REAL ledger-write failure marks the run; "skipped" (non-search
+        # path: CLI/legacy/test) is not a failure and must not pollute the
+        # metrics of a run that was never part of a search (review I-H1).
+        if ledger_error is not None and ledger_error != "skipped":
             m["ledger_write_failed"] = True
 
         # 11. Deflated Sharpe verdict (spec §2.3). Mounted only when the run is
@@ -1046,12 +1049,31 @@ class BaseEngine(ABC):
         ``Engine(config)``. A fresh instance is what makes m=1.0 bit-identical
         to the main run and guarantees no funding/liquidation/swap dedup cache
         carries over (review H4).
+
+        Engines with extra constructor kwargs must have them carried over, or
+        the fresh instance silently falls back to a default and diverges from
+        the main run. GlobalEquityEngine takes ``market="us"`` by default while
+        the runner builds HK runs with ``market="hk"`` — constructing with just
+        ``cls(config)`` would NOT raise (the default swallows it) and would drop
+        the HK stamp-tax/levy/settlement cost stack, breaking m=1.0 identity.
         """
         cls = type(self)
+        # Carry constructor kwargs that change behaviour (currently only the
+        # equity-engine market selector). Guarded by hasattr so engines without
+        # it construct plainly.
+        kwargs: Dict[str, Any] = {}
+        if hasattr(self, "market"):
+            kwargs["market"] = getattr(self, "market")
         try:
-            return cls(config)
+            return cls(config, **kwargs)
         except TypeError:
-            return cls(config, codes)  # CompositeEngine
+            pass
+        # CompositeEngine takes an extra ``codes`` arg (detected structurally to
+        # avoid a circular import of the subclass).
+        try:
+            return cls(config, codes)
+        except TypeError:
+            return cls(config)
 
     def _run_cost_sensitivity(
         self,

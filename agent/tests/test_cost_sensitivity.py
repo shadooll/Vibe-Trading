@@ -147,3 +147,41 @@ def test_crypto_funding_m1_bit_identical(tmp_path):
     cs = m["cost_sensitivity"]["1.0"]
     assert cs["total_return"] == pytest.approx(m["total_return"], rel=1e-12)
     assert cs["n_trades"] == m["trade_count"]
+
+
+# ─── HK market-kwarg identity (review: GlobalEquityEngine constructor arg) ───
+
+
+class _HKLoader:
+    def __init__(self, frame):
+        self._frame = frame
+
+    def fetch(self, *a, **k):
+        return {"0700.HK": self._frame.copy()}
+
+
+def test_hk_market_m1_bit_identical(tmp_path):
+    """m=1.0 must reproduce an HK run whose costs come from the market kwarg.
+
+    GlobalEquityEngine takes a positional ``market`` arg (default "us"); the
+    runner builds HK runs with ``market="hk"``. A fresh sensitivity instance
+    constructed as ``cls(config)`` silently defaults to "us" and drops the HK
+    stamp-tax/levy/settlement stack — so m=1.0 would diverge from the main run.
+    The fresh instance must inherit the live instance's market.
+    """
+    from backtest.engines.global_equity import GlobalEquityEngine
+
+    engine = GlobalEquityEngine({"initial_cash": 1_000_000}, market="hk")
+    config = {
+        "codes": ["0700.HK"], "start_date": "2023-01-01", "end_date": "2023-04-30",
+        "causality_check": "off",
+        "cost_sensitivity": {"multipliers": [1.0, 2.0]},
+    }
+    m = engine.run_backtest(config, _HKLoader(_frame()), _CrossEngine(), tmp_path)
+    cs = m["cost_sensitivity"]
+    # m=1.0 reproduces the main run (HK cost stack intact on the fresh instance).
+    assert cs["1.0"]["total_return"] == pytest.approx(m["total_return"], rel=1e-9)
+    assert cs["1.0"]["n_trades"] == m["trade_count"]
+    # HK run actually charged commission (stamp tax etc.) — non-zero, and grows with the multiplier.
+    assert cs["1.0"]["total_commission"] > 0
+    assert cs["2.0"]["total_commission"] >= cs["1.0"]["total_commission"]

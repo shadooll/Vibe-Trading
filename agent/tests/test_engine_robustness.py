@@ -251,6 +251,57 @@ class TestSymbolIsolation:
         assert run_card["metrics"]["benchmark_return"] == 0.00495
         assert (tmp_path / "run_card.md").exists()
 
+    def test_legacy_run_without_search_marker_has_no_ledger_write_failed(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """A run with no search marker (CLI/legacy/test) is not part of a search:
+        _append_trial_ledger returns "skipped", which must NOT be recorded as a
+        ledger_write_failed flag (review I-H1 — that would pollute the byte-level
+        output of every legacy run)."""
+        monkeypatch.delenv("VIBE_TRADING_SEARCH_ID", raising=False)
+        monkeypatch.setenv("VIBE_TRADING_HOME", str(tmp_path / "home"))
+        from src.config.accessor import reset_env_config
+        reset_env_config()
+
+        dates = pd.bdate_range("2024-04-01", periods=30)
+        close = 10 + np.linspace(0, 2, 30)
+        bars = pd.DataFrame(
+            {
+                "open": close, "high": close * 1.01, "low": close * 0.99,
+                "close": close, "volume": 1000.0,
+            },
+            index=dates,
+        )
+
+        class FakeLoader:
+            def fetch(self, *args, **kwargs):
+                return {"000001.SZ": bars.copy()}
+
+        class SignalEngine:
+            def generate(self, data_map):
+                return {"000001.SZ": pd.Series(1.0, index=data_map["000001.SZ"].index)}
+
+        engine = ChinaAEngine({"initial_cash": 1_000_000})
+        metrics = engine.run_backtest(
+            {
+                "codes": ["000001.SZ"],
+                "start_date": "2024-04-01",
+                "end_date": "2024-04-30",
+                "source": "tushare",
+                "initial_cash": 1_000_000,
+                "causality_check": "off",
+            },
+            FakeLoader(),
+            SignalEngine(),
+            tmp_path,
+        )
+
+        assert "ledger_write_failed" not in metrics
+        run_card = json.loads((tmp_path / "run_card.json").read_text(encoding="utf-8"))
+        assert "ledger_write_failed" not in run_card.get("metrics", {})
+
     def test_configured_fundamental_enrichment_failure_is_not_silent(
         self,
         monkeypatch: pytest.MonkeyPatch,
