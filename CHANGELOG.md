@@ -5,6 +5,13 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Orphaned tests blocked bare `pytest` collection.** `test_load_skill_paging.py` and
+  `test_taiwan_stock_data_tool.py` still imported `TOOL_RESULT_LIMIT` from
+  `src.agent.loop`, but the symbol had moved to `src.config.limits` (commit `fde1aa5`).
+  The two `ImportError`s interrupted collection for the whole suite. Both tests now
+  import from `src.config.limits`, matching the production modules.
+
 ### Changed
 - **Anti-overfitting trusted writes moved to the server process (C′, spec §9.12).**
   On the agent search path, the backtest subprocess (which executes the agent's
