@@ -57,6 +57,16 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   aggressively can starve the server of PIDs. Not addressed by the C′ change. Mitigation:
   per-run PID namespacing / a dedicated cgroup for the untrusted subprocess.
 
+  **Why both are deferred (2026-08-12):** these are pre-deployment hardening items, not active
+  exposures for the current single-user local/research setup. S-C1 only bites when shell tools
+  are explicitly enabled — they default off, and the stack is verified working with them off
+  (see the Phase 0–3 + C′ verification above). The proper S-C1 fix is a real architecture task
+  on Windows (no per-UID separation; it needs a restricted-token child process, not a config
+  tweak), and the `pids_limit` issue only affects Docker/multi-tenant deploys. Neither is worth
+  landing before untrusted agents or external users are actually served. **Trigger to revisit:**
+  before enabling shell tools for a non-trusted agent, or before any Docker / multi-user
+  deployment.
+
 ### Added
 - **Memory Tier 2: Structural Organization** — four independently-gated modules for memory lifecycle enhancement:
   - H-MEM hierarchical directory routing (`VT_MEMORY_HIERARCHY`)
