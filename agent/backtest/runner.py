@@ -1353,22 +1353,25 @@ def _sanitize_data_map(data_map: dict) -> dict:
 def _isolate_test_segment(data_map: dict, config: dict, run_dir: Path) -> Optional[Dict[str, Any]]:
     """Phase 3a (spec §8.1): split the test segment off the agent-visible pack.
 
-    On the agent search path (valid search id) with a three-way split, persist
-    the per-symbol rows past ``valid_end`` to a holdout directory under the real
-    runtime root (``oos_holdout/<run_id>/``). That directory is NOT in the
-    sandbox re-expose whitelist (``_SANDBOX_HOME_REEXPOSE``), so the agent's
-    ephemeral-HOME view of ``~/.vibe-trading`` never contains it — the raw test
-    segment is physically absent from anything the agent can read, one level
-    deeper than 2b's after-the-fact ``ohlcv_*.csv`` trim.
+    On the agent search path (valid search id) with a three-way split, the test
+    segment (rows past ``valid_end``) is held out to ``oos_holdout/<run_id>/``
+    under the real runtime root — a directory NOT in the sandbox re-expose
+    whitelist (``_SANDBOX_HOME_REEXPOSE``), so the agent's ephemeral-HOME view of
+    ``~/.vibe-trading`` never contains it.
+
+    C′ (spec §9.12): this subprocess runs agent code, so it must NOT write the
+    protected holdout itself. It only RECORDS the isolation metadata — boundary,
+    symbols, and per-symbol test row counts — into the ``data_isolation`` block
+    with ``holdout_status="server_pending"``. The trusted server process
+    (backtest_tool) persists the actual holdout CSVs from the full data pack
+    after this subprocess exits, then flips the status. This also fixes the
+    container crash where a vibe-sandbox subprocess could not ``mkdir`` the
+    vibe-owned holdout dir fail-closed (the write now happens at vibe level).
 
     The engine still needs the full series to score the test segment, so the
-    in-memory ``data_map`` fed to ``_AutoLoader`` is left untouched; only the
-    on-disk/agent-visible pack is isolated. Returns the ``data_isolation`` block
-    for the run card, or ``None`` when isolation does not apply (non-agent path,
-    no split, or nothing past the boundary).
-
-    Fail-closed: an unwritable holdout dir raises so the run aborts rather than
-    silently running un-isolated.
+    in-memory ``data_map`` fed to ``_AutoLoader`` is left untouched. Returns the
+    ``data_isolation`` block for the run card, or ``None`` when isolation does
+    not apply (non-agent path, no split, or nothing past the boundary).
     """
     from backtest.trials import current_search_id
 
@@ -1379,6 +1382,57 @@ def _isolate_test_segment(data_map: dict, config: dict, run_dir: Path) -> Option
         return None
 
     boundary = pd.Timestamp(valid_end)
+    test_row_counts: Dict[str, int] = {}
+    for code, df in data_map.items():
+        if isinstance(df.index, pd.DatetimeIndex):
+            n_rows = int((df.index > boundary).sum())
+            if n_rows > 0:
+                test_row_counts[code] = n_rows
+    if not test_row_counts:
+        return None
+
+    run_id = run_dir.name
+    logger.info(
+        "OOS isolation: %d symbol(s) test segment (>%s) recorded for server-side holdout to oos_holdout/%s",
+        len(test_row_counts), valid_end, run_id,
+    )
+    return {
+        "enabled": True,
+        "boundary": str(valid_end),
+        "holdout_path": f"oos_holdout/{run_id}",
+        "holdout_status": "server_pending",
+        "symbols": sorted(test_row_counts),
+        "test_row_counts": test_row_counts,
+        "unblind_reason": "engine requires the test segment in-memory to score segments.test",
+    }
+
+
+def persist_test_holdout(config: dict, run_id: str) -> Dict[str, Any]:
+    """Persist the OOS test-segment holdout. Runs in the TRUSTED server process.
+
+    C′ (spec §9.12): the agent-running subprocess records the isolation metadata
+    (``_isolate_test_segment``) but must not write the protected holdout; the
+    server calls this after the subprocess exits to actually persist it. The
+    full pack is re-fetched through the central loader registry (same corporate-
+    action adjustment / fallback as the run) and the rows past ``valid_end`` are
+    written to ``oos_holdout/<run_id>/`` under the real runtime root.
+
+    Fail-closed: an unwritable holdout dir raises so the run aborts rather than
+    silently running un-isolated (the write now happens at the vibe-owned server
+    level, so the container permission crash of the subprocess write is gone).
+
+    Returns the metadata to merge into the run card's ``data_isolation`` block:
+    ``holdout_status`` flipped to ``"persisted"``, ``symbols``, ``test_row_counts``
+    and ``unblinded_at``.
+    """
+    from src.config.paths import get_runtime_root
+
+    valid_end = config.get("valid_end")
+    if not valid_end:
+        raise ValueError("persist_test_holdout requires config.valid_end")
+    boundary = pd.Timestamp(valid_end)
+
+    data_map = fetch_data_map(config).data_map
     test_parts: Dict[str, pd.DataFrame] = {}
     for code, df in data_map.items():
         if isinstance(df.index, pd.DatetimeIndex):
@@ -1386,29 +1440,27 @@ def _isolate_test_segment(data_map: dict, config: dict, run_dir: Path) -> Option
             if not tail.empty:
                 test_parts[code] = tail
     if not test_parts:
-        return None
+        return {
+            "holdout_status": "persisted",
+            "symbols": [],
+            "test_row_counts": {},
+            "unblinded_at": pd.Timestamp.now(tz="UTC").isoformat(),
+        }
 
-    from src.config.paths import get_runtime_root
-    run_id = run_dir.name
     holdout = get_runtime_root() / "oos_holdout" / run_id
-    # Fail-closed: if we cannot persist the holdout, abort the run (no silent
-    # degradation to an un-isolated agent-visible pack).
     holdout.mkdir(parents=True, exist_ok=True)
     for code, tail in test_parts.items():
         tail.to_csv(holdout / f"ohlcv_test_{code}.csv")
 
-    unblinded_at = pd.Timestamp.now(tz="UTC").isoformat()
     logger.info(
-        "OOS isolation: %d symbol(s) test segment (>%s) held out to %s",
+        "OOS holdout persisted (server): %d symbol(s) test segment (>%s) to %s",
         len(test_parts), valid_end, holdout,
     )
     return {
-        "enabled": True,
-        "boundary": str(valid_end),
-        "holdout_path": f"oos_holdout/{run_id}",
+        "holdout_status": "persisted",
         "symbols": sorted(test_parts),
-        "unblinded_at": unblinded_at,
-        "unblind_reason": "engine requires the test segment in-memory to score segments.test",
+        "test_row_counts": {c: int(len(t)) for c, t in test_parts.items()},
+        "unblinded_at": pd.Timestamp.now(tz="UTC").isoformat(),
     }
 
 

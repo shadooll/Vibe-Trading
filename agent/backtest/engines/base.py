@@ -897,24 +897,28 @@ class BaseEngine(ABC):
             warnings=config.get("content_filter_warnings") or None,
         )
 
-        # 10. Trial ledger (search accounting for Deflated Sharpe). Only the
-        # agent path writes: a run without a search marker (CLI, legacy, tests)
-        # is not part of an optimizer's search and must not pollute the real
-        # ledger. Fail-closed on that path — a silent append failure would let
-        # DSR compute significance on a partial trial set.
+        # 10. Trial ledger (search accounting for Deflated Sharpe). On the agent
+        # search path this subprocess runs agent code (exec_module'd
+        # signal_engine) — it must NOT write the protected ledger. It only
+        # RECORDS the trial fields into metrics["_trial_record"]; the trusted
+        # server process (backtest_tool) appends the ledger + runs DSR after the
+        # subprocess exits (C′, spec §9.12). The non-search path (CLI/legacy/
+        # test) has no server reaper, so it keeps writing inline as before.
         ledger_error = self._append_trial_ledger(config, run_dir, equity_series, m)
         ledger_ok = ledger_error is None
         # Only a REAL ledger-write failure marks the run; "skipped" (non-search
-        # path: CLI/legacy/test) is not a failure and must not pollute the
-        # metrics of a run that was never part of a search (review I-H1).
-        if ledger_error is not None and ledger_error != "skipped":
+        # path: CLI/legacy/test) and "server_pending" (search path — the server
+        # owns the write now) are not failures and must not pollute the metrics
+        # of a run (review I-H1).
+        if ledger_error is not None and ledger_error not in ("skipped", "server_pending"):
             m["ledger_write_failed"] = True
 
-        # 11. Deflated Sharpe verdict (spec §2.3). Mounted only when the run is
-        # part of a search AND has a valid split (valid_sharpe exists) — using
-        # train Sharpe would be self-deception. DSR is retrospective: it scores
-        # this search's trials (including this one) against the luck baseline.
-        dsr_block = self._maybe_run_dsr(
+        # 11. Deflated Sharpe verdict (spec §2.3). On the search path the DSR is
+        # computed by the SERVER after it appends the ledger (C′) — running it
+        # here would score a ledger missing THIS trial. The non-search path has
+        # no server, so it computes inline as before (run_dsr there reads the
+        # ledger the inline append just wrote).
+        dsr_block = None if ledger_error == "server_pending" else self._maybe_run_dsr(
             config, equity_series, bars_per_year, ledger_ok,
         )
         if dsr_block is not None:
@@ -946,16 +950,21 @@ class BaseEngine(ABC):
         equity_series: pd.Series,
         metrics: Dict[str, Any],
     ) -> Optional[str]:
-        """Append one trial row to the search ledger.
+        """Record one trial row for the search ledger.
 
-        Returns None on success, "skipped" when the run is not part of a search
-        (no search_id — nothing to record), or the error message on a real
-        write failure (fail-closed: caller marks ``ledger_write_failed``).
+        On the agent search path the ledger is written by the trusted SERVER
+        process (C′, spec §9.12), not by this agent-running subprocess: this
+        records the trial fields into ``metrics["_trial_record"]`` and returns
+        ``"server_pending"`` so the caller skips the inline DSR. The server
+        reaps the record (via the run card / metrics) and appends it with the
+        first-trial boundary lock. On the non-search path there is no server, so
+        this appends inline and returns None (success), or the error message on
+        a real write failure (fail-closed: caller marks ``ledger_write_failed``).
+        Returns ``"skipped"`` when the run is not part of a search.
         """
         from datetime import datetime, timezone
 
         from backtest.trials import (
-            append_trial_with_sanction,
             config_hash,
             current_search_id,
         )
@@ -996,12 +1005,13 @@ class BaseEngine(ABC):
             "n_trades": metrics.get("trade_count", len(self.trades)),
             "exit_reason_counts": exit_counts,
         }
-        try:
-            append_trial_with_sanction(record)
-        except Exception as exc:  # fail-closed
-            logger.error("trial ledger append failed: %s", exc)
-            return str(exc)
-        return None
+        # C′ (spec §9.12): hand the record to the trusted server via the metrics
+        # channel; the server appends the ledger (and runs DSR) after this
+        # subprocess exits. This subprocess runs agent code and must not write
+        # the protected ledger itself.
+        metrics["_trial_record"] = record
+        metrics["ledger_status"] = "server_pending"
+        return "server_pending"
 
     def _maybe_run_dsr(
         self,

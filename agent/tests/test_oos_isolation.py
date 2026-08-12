@@ -1,11 +1,12 @@
-"""Tests for Phase 3a OOS test-segment physical isolation (spec §8.1).
+"""Tests for Phase 3a OOS test-segment physical isolation (spec §8.1, C′ §9.12).
 
-On the agent search path with a three-way split, the runner persists the rows
-past ``valid_end`` to a holdout dir under the real runtime root
-(``oos_holdout/<run_id>/``) and records a ``data_isolation`` block on the run
-card. The in-memory data_map fed to the engine stays whole (test metrics still
-computed); only the agent-visible pack is isolated. Non-agent / no-split runs
-are untouched.
+On the agent search path with a three-way split, the subprocess RECORDS the
+isolation metadata (``_isolate_test_segment`` → ``data_isolation`` block with
+``holdout_status="server_pending"``) but does NOT write the holdout — the
+trusted server process persists it later via ``persist_test_holdout`` (fail-
+closed). The in-memory data_map fed to the engine stays whole (test metrics
+still computed); only the agent-visible pack is isolated. Non-agent / no-split
+runs are untouched.
 """
 
 from __future__ import annotations
@@ -42,7 +43,9 @@ def _set_home_and_search(tmp_path, monkeypatch, search_id):
     reset_env_config()
 
 
-def test_isolation_splits_and_records_on_agent_path(tmp_path, monkeypatch):
+def test_isolation_records_metadata_on_agent_path(tmp_path, monkeypatch):
+    """C′ (spec §9.12): the subprocess only RECORDS isolation metadata — it does
+    NOT write the holdout (the trusted server persists it later)."""
     _set_home_and_search(tmp_path, monkeypatch, "agent-search-1")
     run_dir = tmp_path / "run_x"
     run_dir.mkdir()
@@ -56,13 +59,12 @@ def test_isolation_splits_and_records_on_agent_path(tmp_path, monkeypatch):
     assert block["enabled"] is True
     assert block["boundary"] == "2023-03-15"
     assert block["symbols"] == ["000001.SZ"]
-    assert block["unblinded_at"]  # non-empty ISO timestamp
-    # Holdout file written under the REAL runtime root, outside the sandbox view.
-    holdout = tmp_path / "home" / "oos_holdout" / "run_x" / "ohlcv_test_000001.SZ.csv"
-    assert holdout.exists()
-    held = pd.read_csv(holdout, index_col=0, parse_dates=True)
-    assert held.index.min() > pd.Timestamp("2023-03-15")
-    assert held.index.max() == frame.index.max()
+    assert block["holdout_path"] == "oos_holdout/run_x"
+    assert block["holdout_status"] == "server_pending"
+    expected_rows = int((frame.index > pd.Timestamp("2023-03-15")).sum())
+    assert block["test_row_counts"] == {"000001.SZ": expected_rows}
+    # The subprocess does NOT write the holdout (deferred to the server).
+    assert not (tmp_path / "home" / "oos_holdout").exists()
     # The in-memory data_map is NOT mutated (engine still gets the full series).
     assert len(data_map["000001.SZ"]) == len(frame)
 
@@ -93,18 +95,57 @@ def test_isolation_skipped_when_nothing_past_boundary(tmp_path, monkeypatch):
     assert block is None
 
 
-def test_isolation_fail_closed_on_unwritable_holdout(tmp_path, monkeypatch):
+def test_persist_holdout_fail_closed_on_unwritable_dir(tmp_path, monkeypatch):
+    """The fail-closed holdout write moved to the server's ``persist_test_holdout``
+    (C′, spec §9.12): an unwritable holdout dir raises rather than silently
+    running un-isolated."""
+    from backtest.runner import persist_test_holdout
+
     _set_home_and_search(tmp_path, monkeypatch, "agent-search-1")
-    run_dir = tmp_path / "run_v"
-    run_dir.mkdir()
+    frame = _frame()
+
+    # Avoid a real loader fetch (network is disabled in tests): feed the frame.
+    import backtest.runner as runner_mod
+
+    class _Res:
+        data_map = {"000001.SZ": frame}
+
+    monkeypatch.setattr(runner_mod, "fetch_data_map", lambda config: _Res())
+
     # Point the runtime root at a path whose parent is a FILE so mkdir fails.
     blocker = tmp_path / "blocker"
     blocker.write_text("x")
     monkeypatch.setenv("VIBE_TRADING_HOME", str(blocker / "home"))
     from src.config.accessor import reset_env_config
     reset_env_config()
+
     with pytest.raises(OSError):
-        _isolate_test_segment({"000001.SZ": _frame()}, {"valid_end": "2023-03-15"}, run_dir)
+        persist_test_holdout({"valid_end": "2023-03-15"}, "run_v")
+
+
+def test_persist_holdout_writes_test_segment(tmp_path, monkeypatch):
+    """The server-side persistence writes the rows past valid_end to the holdout."""
+    from backtest.runner import persist_test_holdout
+
+    _set_home_and_search(tmp_path, monkeypatch, "agent-search-1")
+    frame = _frame()
+
+    import backtest.runner as runner_mod
+
+    class _Res:
+        data_map = {"000001.SZ": frame}
+
+    monkeypatch.setattr(runner_mod, "fetch_data_map", lambda config: _Res())
+
+    meta = persist_test_holdout({"valid_end": "2023-03-15"}, "run_x")
+
+    assert meta["holdout_status"] == "persisted"
+    assert meta["symbols"] == ["000001.SZ"]
+    holdout = tmp_path / "home" / "oos_holdout" / "run_x" / "ohlcv_test_000001.SZ.csv"
+    assert holdout.exists()
+    held = pd.read_csv(holdout, index_col=0, parse_dates=True)
+    assert held.index.min() > pd.Timestamp("2023-03-15")
+    assert held.index.max() == frame.index.max()
 
 
 def test_run_card_mounts_data_isolation(tmp_path):

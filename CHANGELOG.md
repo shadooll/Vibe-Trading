@@ -5,6 +5,19 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Anti-overfitting trusted writes moved to the server process (C′, spec §9.12).**
+  On the agent search path, the backtest subprocess (which executes the agent's
+  `signal_engine.py`) no longer writes the protected trial ledger or the
+  `oos_holdout/` test segment itself. It records the trial + isolation metadata,
+  and the trusted server process (`backtest_tool`) appends the ledger (with the
+  first-trial OOS-boundary lock), persists the holdout, and computes the DSR on
+  the now-complete ledger after the subprocess exits. This keeps the ledger /
+  holdout / DSR out of the address space that runs untrusted strategy code, and
+  fixes two container bugs where the dropped-privilege (vibe-sandbox) subprocess
+  could not write the vibe-owned holdout (crashing search backtests) or ledger
+  (silently corrupting the DSR trial set).
+
 ### Added
 - **Backtest statistical-robustness / anti-overfitting stack (Phase 0–3)** — signal-level
   causality check; trial ledger + Deflated Sharpe Ratio for search accounting; block-bootstrap

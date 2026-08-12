@@ -28,6 +28,14 @@ BACKTEST_SUMMARY_KEYS = (
 # (allow_nan=False). Mirrors the existing `validation` pattern (review H5).
 _NESTED_METRIC_KEYS = ("segments", "attribution", "cost_sensitivity", "dsr")
 
+# Internal handoff keys (C′, spec §9.12): on the agent search path the
+# subprocess records the trial fields into metrics["_trial_record"] so the
+# trusted SERVER process can append the ledger + run DSR after the subprocess
+# exits. It rides the nested-block channel into run_card.json (the server's
+# data source) but is prefixed "_" so it is clearly internal, and is stripped
+# from the card the server rewrites once the ledger is authoritatively written.
+_INTERNAL_HANDOFF_KEYS = ("_trial_record",)
+
 
 def write_run_card(
     run_dir: Path,
@@ -85,6 +93,12 @@ def write_run_card(
     # Nested robustness blocks (spec §7): mounted BEFORE _json_safe below so
     # embedded NaN/Inf are sanitised to null instead of crashing json.dumps.
     for key in _NESTED_METRIC_KEYS:
+        if key in metrics and metrics[key] is not None:
+            card[key] = metrics[key]
+    # Internal handoff (C′, spec §9.12): the trial record rides into the card so
+    # the trusted server can reap it; the server strips it when it rewrites the
+    # card after authoritatively writing the ledger.
+    for key in _INTERNAL_HANDOFF_KEYS:
         if key in metrics and metrics[key] is not None:
             card[key] = metrics[key]
     # Phase 3a (spec §8.1): OOS test-segment isolation + unblinding record.

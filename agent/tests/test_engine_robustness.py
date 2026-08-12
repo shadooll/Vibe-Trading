@@ -302,6 +302,70 @@ class TestSymbolIsolation:
         run_card = json.loads((tmp_path / "run_card.json").read_text(encoding="utf-8"))
         assert "ledger_write_failed" not in run_card.get("metrics", {})
 
+    def test_search_path_defers_ledger_write_and_dsr(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """C′ (spec §9.12): on the search path the agent-running engine must NOT
+        write the ledger or compute the DSR inline — it records the trial into
+        metrics["_trial_record"], marks ledger_status=server_pending, and leaves
+        both the write and the DSR to the trusted server process."""
+        monkeypatch.setenv("VIBE_TRADING_SEARCH_ID", "agent-search-c1")
+        monkeypatch.setenv("VIBE_TRADING_HOME", str(tmp_path / "home"))
+        from src.config.accessor import reset_env_config
+        reset_env_config()
+
+        dates = pd.bdate_range("2024-01-01", periods=80)
+        close = 10 + np.linspace(0, 2, 80)
+        bars = pd.DataFrame(
+            {
+                "open": close, "high": close * 1.01, "low": close * 0.99,
+                "close": close, "volume": 1000.0,
+            },
+            index=dates,
+        )
+
+        class FakeLoader:
+            def fetch(self, *args, **kwargs):
+                return {"000001.SZ": bars.copy()}
+
+        class SignalEngine:
+            def generate(self, data_map):
+                return {"000001.SZ": pd.Series(1.0, index=data_map["000001.SZ"].index)}
+
+        engine = ChinaAEngine({"initial_cash": 1_000_000})
+        metrics = engine.run_backtest(
+            {
+                "codes": ["000001.SZ"],
+                "start_date": "2024-01-01",
+                "end_date": "2024-04-30",
+                "train_end": "2024-02-15",
+                "valid_end": "2024-03-15",
+                "source": "tushare",
+                "initial_cash": 1_000_000,
+                "causality_check": "off",
+            },
+            FakeLoader(),
+            SignalEngine(),
+            tmp_path,
+        )
+
+        # No inline ledger write / no inline DSR; handoff recorded instead.
+        assert "ledger_write_failed" not in metrics
+        assert metrics["ledger_status"] == "server_pending"
+        assert "dsr" not in metrics
+        record = metrics.get("_trial_record")
+        assert isinstance(record, dict)
+        assert record["search_id"] == "agent-search-c1"
+        assert record["valid_end"] == "2024-03-15"
+        # The protected ledger file was NOT written by the subprocess.
+        assert not (tmp_path / "home" / "backtest_trials.jsonl").exists()
+        # The run card carries the handoff for the server to reap.
+        run_card = json.loads((tmp_path / "run_card.json").read_text(encoding="utf-8"))
+        assert run_card["_trial_record"]["search_id"] == "agent-search-c1"
+        assert run_card["metrics"]["ledger_status"] == "server_pending"
+
     def test_configured_fundamental_enrichment_failure_is_not_silent(
         self,
         monkeypatch: pytest.MonkeyPatch,
