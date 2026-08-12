@@ -31,15 +31,24 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Known Limitations
 - **Shell tools bypass the anti-overfitting controls (S-C1, deferred to a hardening pass).**
-  When `VIBE_TRADING_ENABLE_SHELL_TOOLS=1`, the shell tool runs `subprocess` in the server
-  process's real HOME with no path sandbox, so an agent process could in principle read the
+  When `VIBE_TRADING_ENABLE_SHELL_TOOLS=1`, the shell tool runs `subprocess` with the
+  **same OS identity as the server process**. The C′ change moved the trial ledger and
+  `oos_holdout/` holdout under the server's ownership — which is exactly the identity the
+  shell tool shares, so an agent with shell access could in principle still read the
   `oos_holdout/` test segment or append forged rows to `backtest_trials.jsonl` (manipulating
   the DSR trial count). The file-tool write path is already constrained (ledger/holdout are
-  outside `allowed_write_roots`); only the shell tool is exposed. Mitigation today: shell
-  tools are off by default — enabling them trades away the anti-overfitting guarantee. The
-  proper fix (path-constrain shell commands, and/or move the ledger + holdout behind an
-  ACL/owner-isolated location writable only by the trusted server process) is a separate
-  architecture task.
+  outside `allowed_write_roots`); only the shell tool is exposed, because it shares the
+  server's OS identity rather than the dropped-privilege (vibe-sandbox) sandbox the
+  LLM-generated-code subprocess runs in. On Windows there is no per-UID separation at all,
+  so the only mitigation there is the default. **Mitigation today: shell tools are off by
+  default — enabling them trades away the anti-overfitting guarantee.** The proper fix is to
+  run shell commands in the same dropped-privilege sandbox as generated code (POSIX) or a
+  restricted-token child (Windows) — a separate architecture task.
+
+- **Shared `pids_limit` denial-of-service (low severity).** The Docker `pids_limit` (512) is a
+  single pool shared by the server and all its subprocesses; a backtest subprocess that forks
+  aggressively can starve the server of PIDs. Not addressed by the C′ change. Mitigation:
+  per-run PID namespacing / a dedicated cgroup for the untrusted subprocess.
 
 ### Added
 - **Memory Tier 2: Structural Organization** — four independently-gated modules for memory lifecycle enhancement:
